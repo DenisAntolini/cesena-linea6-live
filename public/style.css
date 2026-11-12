@@ -1,0 +1,760 @@
+/* ==========================================================================
+   Cesena Linea 6 Live • Google Maps Transit Style CSS
+   ========================================================================== */
+
+:root {
+  --gm-blue: #1A73E8;
+  --gm-blue-hover: #1765CC;
+  --gm-blue-light: #E8F0FE;
+  --gm-red: #D93025;
+  --gm-green: #188038;
+  --gm-green-light: #E6F4EA;
+  --gm-yellow: #B06000;
+  --gm-yellow-light: #FEF7E0;
+  --gm-red-light: #FCE8E6;
+  --gm-gray-900: #202124;
+  --gm-gray-700: #3C4043;
+  --gm-gray-600: #5F6368;
+  --gm-gray-300: #DADCE0;
+  --gm-gray-100: #F1F3F4;
+  --gm-gray-50: #F8F9FA;
+  --font-family: 'Roboto', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+  --shadow-elevation: 0 4px 18px rgba(0, 0, 0, 0.16), 0 1px 4px rgba(0, 0, 0, 0.08);
+  --shadow-fab: 0 3px 8px rgba(0, 0, 0, 0.22);
+}
+
+*, *::before, *::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html, body {
+  width: 100vw;
+  height: 100vh;
+  overflow: hidden;
+  font-family: var(--font-family);
+  color: var(--gm-gray-900);
+  background: #E5E9EE;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* ==========================================================================
+   Mappa Leaflet a Tutto Schermo (100vw x 100vh)
+   ========================================================================== */
+#map {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100vw;
+  height: 100vh;
+  z-index: 1;
+}
+
+/* Filtro Mappa Stile Google Maps (chiaro, morbido, leggibile) */
+.osm-tile-layer {
+  filter: grayscale(25%) contrast(95%) brightness(103%);
+}
+
+/* ==========================================================================
+   Card Fluttuante Stile Google Maps Transit (Top-Left)
+   ========================================================================== */
+.gmaps-card {
+  position: absolute;
+  top: 16px;
+  left: 16px;
+  width: 360px;
+  max-height: calc(100vh - 32px);
+  background: #FFFFFF;
+  border-radius: 16px;
+  box-shadow: var(--shadow-elevation);
+  z-index: 1000;
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+  overflow-x: hidden;
+  transition: transform 0.3s cubic-bezier(0.16, 1, 0.3, 1), max-height 0.3s ease;
+}
+
+/* Barra di scorrimento morbida */
+.gmaps-card::-webkit-scrollbar {
+  width: 5px;
+}
+.gmaps-card::-webkit-scrollbar-thumb {
+  background: var(--gm-gray-300);
+  border-radius: 3px;
+}
+
+/* Intestazione Card */
+.card-header {
+  padding: 16px 18px 12px 18px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  border-bottom: 1px solid var(--gm-gray-100);
+}
+
+.header-transit-badge {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.line-badge-num {
+  width: 36px;
+  height: 36px;
+  background: var(--gm-red);
+  color: #FFFFFF;
+  font-size: 20px;
+  font-weight: 900;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 8px;
+  box-shadow: 0 2px 6px rgba(217, 48, 37, 0.35);
+}
+
+.header-title {
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--gm-gray-900);
+  line-height: 1.2;
+}
+
+.header-live-indicator {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 3px;
+}
+
+.live-dot-pulse {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--gm-green);
+  box-shadow: 0 0 0 0 rgba(24, 128, 56, 0.7);
+  animation: radar-ping 1.8s infinite;
+}
+
+@keyframes radar-ping {
+  0% { box-shadow: 0 0 0 0 rgba(24, 128, 56, 0.7); }
+  70% { box-shadow: 0 0 0 8px rgba(24, 128, 56, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(24, 128, 56, 0); }
+}
+
+.live-text {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--gm-green);
+  letter-spacing: 0.5px;
+}
+
+.collapse-btn {
+  display: none;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  padding: 4px;
+}
+
+/* Sezioni della Card */
+.card-section {
+  padding: 14px 18px;
+  border-bottom: 1px solid var(--gm-gray-100);
+}
+
+/* 1. Tab Direzioni e Selettore Fermata */
+.dir-tabs {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  background: var(--gm-gray-100);
+  border-radius: 10px;
+  padding: 3px;
+  gap: 3px;
+  margin-bottom: 12px;
+}
+
+.dir-tab {
+  background: transparent;
+  border: none;
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--gm-gray-600);
+  padding: 8px 6px;
+  border-radius: 8px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  transition: all 0.2s ease;
+  white-space: nowrap;
+}
+
+.dir-tab.active {
+  background: #FFFFFF;
+  color: var(--gm-blue);
+  font-weight: 700;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.12);
+}
+
+.dir-tab-arrow {
+  font-size: 11px;
+}
+
+.stop-picker-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.select-container {
+  flex-grow: 1;
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.stop-icon {
+  position: absolute;
+  left: 10px;
+  font-size: 14px;
+  pointer-events: none;
+}
+
+.gmaps-select {
+  width: 100%;
+  height: 40px;
+  padding: 0 12px 0 32px;
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--gm-gray-900);
+  background: var(--gm-gray-50);
+  border: 1px solid var(--gm-gray-300);
+  border-radius: 8px;
+  outline: none;
+  cursor: pointer;
+  transition: border-color 0.2s, background-color 0.2s;
+}
+
+.gmaps-select:focus {
+  border-color: var(--gm-blue);
+  background: #FFFFFF;
+  box-shadow: 0 0 0 2px rgba(26, 115, 232, 0.2);
+}
+
+.near-me-btn {
+  width: 40px;
+  height: 40px;
+  background: var(--gm-blue-light);
+  border: 1px solid rgba(26, 115, 232, 0.25);
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: background-color 0.2s;
+  flex-shrink: 0;
+}
+
+.near-me-btn:hover {
+  background: #D2E3FC;
+}
+
+.gps-target-icon {
+  font-size: 16px;
+}
+
+.gps-status-note {
+  margin-top: 8px;
+  font-size: 11px;
+  color: var(--gm-blue);
+  background: var(--gm-blue-light);
+  padding: 4px 8px;
+  border-radius: 6px;
+}
+
+/* 2. Prossimo Autobus LIVE */
+.next-bus-hero {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  margin-bottom: 4px;
+}
+
+.next-bus-eta-large {
+  font-size: 34px;
+  font-weight: 900;
+  color: var(--gm-gray-900);
+  letter-spacing: -0.8px;
+  line-height: 1;
+}
+
+.next-bus-clock-time {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--gm-gray-600);
+}
+
+.next-bus-sub {
+  font-size: 12px;
+  color: var(--gm-gray-700);
+  margin-bottom: 10px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.live-radar-icon {
+  color: var(--gm-green);
+  font-weight: 900;
+  animation: pulse-icon 1.5s infinite;
+}
+
+@keyframes pulse-icon {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}
+
+/* Badge Pillola Catchability (Google Maps Transit) */
+.catch-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12px;
+  font-weight: 700;
+  padding: 6px 12px;
+  border-radius: 20px;
+  line-height: 1.2;
+}
+
+.catch-pill.easy {
+  background: var(--gm-green-light);
+  color: var(--gm-green);
+  border: 1px solid rgba(24, 128, 56, 0.2);
+}
+
+.catch-pill.hurry {
+  background: var(--gm-yellow-light);
+  color: var(--gm-yellow);
+  border: 1px solid rgba(176, 96, 0, 0.25);
+  animation: pulse-hurry 1.8s infinite ease-in-out;
+}
+
+@keyframes pulse-hurry {
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(1.02); }
+}
+
+.catch-pill.missed {
+  background: var(--gm-red-light);
+  color: var(--gm-red);
+  border: 1px solid rgba(217, 48, 37, 0.25);
+}
+
+.show-bus-action-btn {
+  margin-top: 10px;
+  width: 100%;
+  background: var(--gm-gray-50);
+  border: 1px solid var(--gm-gray-300);
+  color: var(--gm-blue);
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 7px 10px;
+  border-radius: 8px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  transition: all 0.2s;
+}
+
+.show-bus-action-btn:hover {
+  background: var(--gm-blue-light);
+  border-color: var(--gm-blue);
+}
+
+/* 3. Passaggi Successivi */
+.subsequent-title {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--gm-gray-600);
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  margin-bottom: 8px;
+}
+
+.subsequent-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.subsequent-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 10px;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: background-color 0.15s;
+}
+
+.subsequent-item:hover {
+  background: var(--gm-gray-100);
+}
+
+.sub-item-left {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.sub-item-badge {
+  background: var(--gm-blue);
+  color: #FFFFFF;
+  font-size: 11px;
+  font-weight: 800;
+  padding: 2px 6px;
+  border-radius: 4px;
+}
+
+.sub-item-dest {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--gm-gray-900);
+}
+
+.sub-item-right {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  text-align: right;
+}
+
+.sub-item-eta {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--gm-gray-900);
+}
+
+.sub-item-live-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--gm-green);
+  display: inline-block;
+}
+
+.sub-item-clock {
+  font-size: 11px;
+  color: var(--gm-gray-600);
+}
+
+/* ==========================================================================
+   Controlli Fluttuanti Stile Google Maps (FABs)
+   ========================================================================== */
+.gmaps-fab-group {
+  position: absolute;
+  bottom: 24px;
+  right: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  z-index: 1000;
+}
+
+.gmaps-fab {
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  background: #FFFFFF;
+  border: none;
+  box-shadow: var(--shadow-fab);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: transform 0.15s, background-color 0.15s;
+}
+
+.gmaps-fab:hover {
+  background: var(--gm-gray-50);
+  transform: scale(1.06);
+}
+
+.gmaps-fab:active {
+  transform: scale(0.96);
+}
+
+/* ==========================================================================
+   MARKER AUTOBUS LIVE (Google Maps Style)
+   ========================================================================== */
+.gmaps-bus-marker {
+  position: relative;
+  width: 40px;
+  height: 40px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+
+/* Cerchio Pulsante Segnale GPS Live */
+.gmaps-bus-radar-ring {
+  position: absolute;
+  width: 38px;
+  height: 38px;
+  border-radius: 50%;
+  background: rgba(24, 128, 56, 0.35);
+  animation: bus-radar-ping 2s infinite ease-out;
+  pointer-events: none;
+}
+
+@keyframes bus-radar-ping {
+  0% { transform: scale(0.7); opacity: 0.9; }
+  100% { transform: scale(2.0); opacity: 0; }
+}
+
+/* Icona Principale del Bus */
+.gmaps-bus-core {
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  background: var(--gm-blue);
+  color: #FFFFFF;
+  border: 2px solid #FFFFFF;
+  box-shadow: 0 3px 8px rgba(0, 0, 0, 0.35);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 900;
+  font-size: 13px;
+  position: relative;
+  z-index: 2;
+  transition: transform 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.gmaps-bus-marker.dir-0 .gmaps-bus-core {
+  background: var(--gm-blue);
+}
+
+.gmaps-bus-marker.dir-1 .gmaps-bus-core {
+  background: #0D652D; /* Verde scuro transit per dir 1 */
+}
+
+.gmaps-bus-marker:hover .gmaps-bus-core {
+  transform: scale(1.18);
+}
+
+/* Freccia di orientamento direzione (bearing) */
+.gmaps-bus-arrow {
+  position: absolute;
+  top: -6px;
+  left: 50%;
+  margin-left: -4px;
+  width: 8px;
+  height: 8px;
+  transform-origin: center 21px;
+  z-index: 3;
+  pointer-events: none;
+}
+
+.gmaps-bus-arrow polygon {
+  fill: #202124;
+}
+
+/* Targhetta con minuti alla prossima fermata */
+.gmaps-bus-eta-tag {
+  position: absolute;
+  bottom: -15px;
+  background: rgba(32, 33, 36, 0.92);
+  color: #FFFFFF;
+  font-size: 9px;
+  font-weight: 700;
+  padding: 1px 5px;
+  border-radius: 3px;
+  white-space: nowrap;
+  letter-spacing: 0.2px;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.3);
+}
+
+/* ==========================================================================
+   MARKER FERMATE (Senza cartellini fissi invasivi!)
+   ========================================================================== */
+.stop-circle-marker {
+  transition: r 0.2s;
+}
+
+.stop-circle-marker:hover {
+  filter: drop-shadow(0 2px 5px rgba(0,0,0,0.3));
+}
+
+/* Marker Fermata Selezionata Utente (Glow Viola/Blu) */
+.user-stop-pin {
+  position: relative;
+  width: 24px;
+  height: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.user-stop-halo {
+  position: absolute;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: rgba(26, 115, 232, 0.35);
+  animation: user-stop-pulse 2s infinite ease-out;
+}
+
+@keyframes user-stop-pulse {
+  0% { transform: scale(0.6); opacity: 1; }
+  100% { transform: scale(2.4); opacity: 0; }
+}
+
+.user-stop-center-dot {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--gm-blue);
+  border: 2.5px solid #FFFFFF;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.35);
+  z-index: 2;
+}
+
+/* Marker Posizione Attuale GPS Utente (Punto Blu Google Maps) */
+.user-location-dot {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: #4285F4;
+  border: 2.5px solid #FFFFFF;
+  box-shadow: 0 1px 5px rgba(0, 0, 0, 0.3);
+}
+
+/* Tooltip morbido pulito per fermate (appare solo su hover/click) */
+.leaflet-tooltip.gmaps-stop-tooltip {
+  background: rgba(32, 33, 36, 0.94) !important;
+  color: #FFFFFF !important;
+  border: none !important;
+  font-family: var(--font-family) !important;
+  font-size: 11px !important;
+  font-weight: 500 !important;
+  padding: 4px 8px !important;
+  border-radius: 4px !important;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25) !important;
+  white-space: nowrap !important;
+}
+
+.leaflet-tooltip-top.gmaps-stop-tooltip::before {
+  border-top-color: rgba(32, 33, 36, 0.94) !important;
+}
+
+/* Popup Leaflet pulito stile Google Maps */
+.leaflet-popup-content-wrapper {
+  border-radius: 12px !important;
+  box-shadow: var(--shadow-elevation) !important;
+  padding: 0 !important;
+  overflow: hidden !important;
+}
+
+.leaflet-popup-content {
+  margin: 0 !important;
+  line-height: 1.4 !important;
+}
+
+.gmaps-popup {
+  padding: 12px 14px;
+  min-width: 200px;
+}
+
+.gmaps-popup-title {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--gm-gray-900);
+  margin-bottom: 2px;
+}
+
+.gmaps-popup-sub {
+  font-size: 11px;
+  color: var(--gm-gray-600);
+}
+
+/* Loading Shimmer */
+.loading-shimmer {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 6px 0;
+}
+
+.shimmer-line {
+  background: linear-gradient(90deg, #F1F3F4 25%, #E8EAED 50%, #F1F3F4 75%);
+  background-size: 200% 100%;
+  animation: shimmer 1.5s infinite;
+  border-radius: 4px;
+}
+
+.shimmer-line.eta {
+  width: 120px;
+  height: 32px;
+}
+
+.shimmer-line.sub {
+  width: 220px;
+  height: 14px;
+}
+
+@keyframes shimmer {
+  0% { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+
+/* ==========================================================================
+   Responsive Mobile (Bottom Sheet Google Maps Style)
+   ========================================================================== */
+@media (max-width: 768px) {
+  .gmaps-card {
+    top: auto;
+    bottom: 0;
+    left: 0;
+    width: 100%;
+    max-height: 55vh;
+    border-radius: 20px 20px 0 0;
+    box-shadow: 0 -4px 25px rgba(0, 0, 0, 0.18);
+  }
+
+  .collapse-btn.mobile-only {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .handle-bar {
+    width: 36px;
+    height: 4px;
+    background: var(--gm-gray-300);
+    border-radius: 2px;
+  }
+
+  .gmaps-fab-group {
+    bottom: calc(55vh + 16px);
+    right: 14px;
+  }
+
+  .gmaps-card.collapsed {
+    max-height: 80px;
+    overflow: hidden;
+  }
+
+  .gmaps-card.collapsed ~ .gmaps-fab-group {
+    bottom: 96px;
+  }
+}

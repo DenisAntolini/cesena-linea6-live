@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://cesena-linea6.onrender.com/sitemap.xml

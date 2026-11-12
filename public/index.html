@@ -1,0 +1,169 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <meta name="theme-color" content="#1A73E8">
+  
+  <!-- SEO Primary Meta Tags -->
+  <title>Linea 6 Cesena Live - Posizione Autobus in Tempo Reale | Start Romagna</title>
+  <meta name="title" content="Linea 6 Cesena Live - Posizione Autobus in Tempo Reale | Start Romagna">
+  <meta name="description" content="Traccia in tempo reale gli autobus della Linea 6 di Cesena (Rio Maggiore - Stazione FS - Ospedale Bufalini - Montefiore). Mappa interattiva Google Maps style, posizione GPS e orari dei prossimi passaggi.">
+  <meta name="keywords" content="Cesena, Linea 6, autobus, Start Romagna, tempo reale, orari bus, GPS live, Stazione Cesena, Ospedale Bufalini, Montefiore">
+  <meta name="robots" content="index, follow">
+  <link rel="canonical" href="https://cesena-linea6.onrender.com/">
+
+  <!-- Open Graph / Facebook / WhatsApp / Telegram -->
+  <meta property="og:type" content="website">
+  <meta property="og:url" content="https://cesena-linea6.onrender.com/">
+  <meta property="og:title" content="Linea 6 Cesena Live - Posizione Autobus in Tempo Reale">
+  <meta property="og:description" content="Guarda dove sono i bus della Linea 6 a Cesena in tempo reale lungo la strada vera. Verifica se fai in tempo alla fermata!">
+  <meta property="og:image" content="https://cesena-linea6.onrender.com/icon.svg">
+
+  <!-- Twitter -->
+  <meta property="twitter:card" content="summary_large_image">
+  <meta property="twitter:url" content="https://cesena-linea6.onrender.com/">
+  <meta property="twitter:title" content="Linea 6 Cesena Live - Posizione Autobus in Tempo Reale">
+  <meta property="twitter:description" content="Mappa live GPS e orari di arrivo autobus Linea 6 Start Romagna a Cesena.">
+  <meta property="twitter:image" content="https://cesena-linea6.onrender.com/icon.svg">
+
+  <!-- Structured Data JSON-LD -->
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "WebApplication",
+    "name": "Cesena Linea 6 Live",
+    "url": "https://cesena-linea6.onrender.com/",
+    "applicationCategory": "TravelApplication",
+    "operatingSystem": "All",
+    "description": "Applicazione di tracciamento GPS in tempo reale per la Linea 6 degli autobus di Cesena (Start Romagna).",
+    "offers": {
+      "@type": "Offer",
+      "price": "0",
+      "priceCurrency": "EUR"
+    }
+  }
+  </script>
+  
+  <!-- PWA Manifest & Icons -->
+  <link rel="manifest" href="/manifest.json">
+  <link rel="icon" type="image/svg+xml" href="/icon.svg">
+  <link rel="apple-touch-icon" href="/icon.svg">
+  
+  <!-- Font Google Roboto & Google Sans style -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700;900&display=swap" rel="stylesheet">
+  
+  <!-- Leaflet CSS -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" 
+        integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="">
+
+  <!-- App Styles (Google Maps Transit Theme) -->
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+  <!-- Mappa a Tutto Schermo (100vw x 100vh) -->
+  <div id="map"></div>
+
+  <!-- Card Fluttuante Google Maps Transit (Top-Left su Desktop, Bottom Sheet su Mobile) -->
+  <aside class="gmaps-card" id="transitCard">
+    <!-- Intestazione Card Google Maps -->
+    <div class="card-header">
+      <div class="header-transit-badge">
+        <span class="line-badge-num">6</span>
+        <div class="header-info">
+          <h1 class="header-title">Linea 6 • Cesena</h1>
+          <div class="header-live-indicator">
+            <span class="live-dot-pulse"></span>
+            <span class="live-text">GPS IN TEMPO REALE</span>
+          </div>
+        </div>
+      </div>
+      <button id="toggleCollapseBtn" class="collapse-btn mobile-only" aria-label="Espandi/Riduci scheda">
+        <span class="handle-bar"></span>
+      </button>
+    </div>
+
+    <!-- 1. Selettore Direzione e Fermata -->
+    <div class="card-section section-selection">
+      <!-- Tab Direzioni Google Maps -->
+      <div class="dir-tabs" role="tablist">
+        <button type="button" class="dir-tab active" id="dirTab0" data-dir="0" role="tab" aria-selected="true">
+          <span class="dir-tab-arrow">➔</span> Verso Montefiore
+        </button>
+        <button type="button" class="dir-tab" id="dirTab1" data-dir="1" role="tab" aria-selected="false">
+          <span class="dir-tab-arrow">➔</span> Verso Rio Maggiore
+        </button>
+      </div>
+
+      <!-- Riga Selezione Fermata con bottone GPS -->
+      <div class="stop-picker-row">
+        <div class="select-container">
+          <span class="stop-icon">🚏</span>
+          <select id="stopSelect" class="gmaps-select" aria-label="Seleziona la tua fermata">
+            <option value="">Caricamento fermate...</option>
+          </select>
+        </div>
+        <button id="nearMeBtn" class="near-me-btn" title="Usa la fermata più vicina">
+          <span class="gps-target-icon">📍</span>
+        </button>
+      </div>
+      <div id="gpsStatusNote" class="gps-status-note" style="display: none;"></div>
+    </div>
+
+    <!-- 2. Prossimo Autobus LIVE (In arrivo adesso) -->
+    <div class="card-section section-next-bus" id="nextBusContainer">
+      <div class="loading-shimmer">
+        <div class="shimmer-line eta"></div>
+        <div class="shimmer-line sub"></div>
+      </div>
+    </div>
+
+    <!-- 3. Passaggi Successivi (3 righe compatte stile Google Maps) -->
+    <div class="card-section section-subsequent">
+      <div class="subsequent-title">Passaggi successivi</div>
+      <div class="subsequent-list" id="subsequentList">
+        <!-- Generato dinamicamente -->
+      </div>
+    </div>
+  </aside>
+
+  <!-- Controlli Mappa Fluttuanti Stile Google Maps (Floating Action Buttons) -->
+  <div class="gmaps-fab-group">
+    <button id="floatingNearMeBtn" class="gmaps-fab" title="Centra sulla mia posizione" aria-label="La mia posizione">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#5F6368" stroke-width="2">
+        <circle cx="12" cy="12" r="7"/>
+        <line x1="12" y1="1" x2="12" y2="5"/>
+        <line x1="12" y1="19" x2="12" y2="23"/>
+        <line x1="1" y1="12" x2="5" y2="12"/>
+        <line x1="19" y1="12" x2="23" y2="12"/>
+      </svg>
+    </button>
+    <button id="fitRouteBtn" class="gmaps-fab" title="Inquadra tutto il percorso" aria-label="Inquadra percorso">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#5F6368" stroke-width="2">
+        <path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7"/>
+      </svg>
+    </button>
+  </div>
+
+  <!-- Leaflet JS -->
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" 
+          integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+  
+  <!-- App JS -->
+  <script src="app.js"></script>
+
+  <!-- PWA Service Worker Registration -->
+  <script>
+    if ('serviceWorker' in navigator) {
+      window.addEventListener('load', () => {
+        navigator.serviceWorker.register('/sw.js')
+          .then((reg) => console.log('[PWA] Service Worker attivo:', reg.scope))
+          .catch((err) => console.warn('[PWA] Service Worker non registrato:', err));
+      });
+    }
+  </script>
+</body>
+</html>
