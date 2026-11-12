@@ -9,6 +9,7 @@
   // Configurazione globale
   const CONFIG = {
     CESENA_CENTER: [44.1420, 12.2430],
+    CAMPUS_CESENA: [44.14710, 12.23550], // Campus Universitario di Cesena
     DEFAULT_ZOOM: 14,
     POLL_INTERVAL_MS: 5000,
     ANIMATION_DURATION_MS: 1800,
@@ -79,7 +80,7 @@
      ========================================================================== */
   function initMap() {
     state.map = L.map('map', {
-      center: CONFIG.CESENA_CENTER,
+      center: CONFIG.CAMPUS_CESENA,
       zoom: CONFIG.DEFAULT_ZOOM,
       zoomControl: false
     });
@@ -105,6 +106,11 @@
     state.layers.stopsGroup = L.layerGroup().addTo(state.map);
     state.layers.busesGroup = L.layerGroup().addTo(state.map);
     state.layers.userGroup = L.layerGroup().addTo(state.map);
+
+    // Click sulla mappa per riposizionare il punto blu dell'utente ovunque a Cesena
+    state.map.on('click', (e) => {
+      setUserPosition(e.latlng.lat, e.latlng.lng, 'Posizione selezionata sulla mappa', false);
+    });
   }
 
   /* ==========================================================================
@@ -121,11 +127,13 @@
       renderStops(data);
       populateStopsDropdown(state.currentDirection);
 
-      // Seleziona la prima fermata (o Cesena Stazione FS)
-      const currentStops = data.routes_by_direction?.[String(state.currentDirection)]?.stops || data.stops || [];
-      const defaultStop = currentStops.find(s => s.stop_id === 'CE_6011' || s.stop_name?.toLowerCase().includes('stazione')) || currentStops[0];
-      if (defaultStop) {
-        selectStop(defaultStop.stop_id, false);
+      // Seleziona di default la fermata Università (o la prima fermata) se l'utente non ne ha una
+      if (!state.selectedStopId) {
+        const currentStops = data.routes_by_direction?.[String(state.currentDirection)]?.stops || data.stops || [];
+        const defaultStop = currentStops.find(s => s.stop_id === 'CE_6008' || s.stop_name?.toLowerCase().includes('universit')) || currentStops[0];
+        if (defaultStop) {
+          selectStop(defaultStop.stop_id, false);
+        }
       }
 
       fitRouteBounds();
@@ -315,10 +323,23 @@
     populateStopsDropdown(newDir);
     updateMapVisualHierarchy();
 
-    // Seleziona la prima fermata o corrispondente
+    // Se l'utente ha una posizione attiva, seleziona la fermata più vicina nella nuova direzione
     const newStops = state.staticData?.routes_by_direction?.[String(newDir)]?.stops || [];
-    let nextStop = newStops.find(s => s.stop_id === state.selectedStopId);
-    if (!nextStop) nextStop = newStops[0];
+    let nextStop = null;
+    if (state.userGps) {
+      let minDist = Infinity;
+      newStops.forEach(s => {
+        const d = haversineDistanceMeters(state.userGps.lat, state.userGps.lon, s.lat, s.lon);
+        if (d < minDist) {
+          minDist = d;
+          nextStop = s;
+        }
+      });
+    }
+
+    if (!nextStop) {
+      nextStop = newStops.find(s => s.stop_id === state.selectedStopId) || newStops[0];
+    }
 
     if (nextStop) {
       selectStop(nextStop.stop_id, true);
@@ -375,71 +396,99 @@
   }
 
   /* ==========================================================================
-     4. GEOLOCALIZZAZIONE & CALCOLO AUTOMATICO A PIEDI (SENZA BOTTONI SUPERFLUI)
+     4. GEOLOCALIZZAZIONE & CALCOLO AUTOMATICO A PIEDI (PUNTO BLU DRAGGABLE)
      ========================================================================== */
-  function handleNearMe() {
-    const handleSuccess = (userLat, userLon, isSimulated = false) => {
-      state.userGps = { lat: userLat, lon: userLon };
+  function setUserPosition(userLat, userLon, locationLabel = 'La tua posizione', shouldFitBounds = true) {
+    state.userGps = { lat: userLat, lon: userLon };
 
-      // Disegna il punto blu utente stile Google Maps
-      if (state.userGpsMarker) {
-        state.layers.userGroup.removeLayer(state.userGpsMarker);
+    if (state.userGpsMarker) {
+      state.userGpsMarker.setLatLng([userLat, userLon]);
+    } else {
+      const userIcon = L.divIcon({
+        html: `
+          <div class="user-loc-wrapper">
+            <div class="user-location-pulse"></div>
+            <div class="user-location-dot" title="Trascina per spostare la tua posizione"></div>
+          </div>
+        `,
+        className: 'user-loc-div-icon',
+        iconSize: [24, 24],
+        iconAnchor: [12, 12]
+      });
+
+      state.userGpsMarker = L.marker([userLat, userLon], {
+        icon: userIcon,
+        draggable: true,
+        zIndexOffset: 2000
+      }).addTo(state.layers.userGroup);
+
+      state.userGpsMarker.on('dragend', (e) => {
+        const pos = e.target.getLatLng();
+        setUserPosition(pos.lat, pos.lng, 'Posizione personalizzata', false);
+      });
+    }
+
+    state.userGpsMarker.bindPopup(`
+      <div style="font-size:13px; line-height:1.4; padding:2px;">
+        <strong>📍 ${locationLabel}</strong><br>
+        <span style="font-size:11px; color:#5F6368;">Trascina questo punto blu o clicca sulla mappa per cambiare posizione</span>
+      </div>
+    `, { offset: [0, -12] });
+
+    // Cerca la fermata più vicina nella direzione attuale
+    const curStops = state.staticData?.routes_by_direction?.[String(state.currentDirection)]?.stops || [];
+    let closestStop = null;
+    let minDistance = Infinity;
+
+    curStops.forEach(s => {
+      const d = haversineDistanceMeters(userLat, userLon, s.lat, s.lon);
+      if (d < minDistance) {
+        minDistance = d;
+        closestStop = s;
+      }
+    });
+
+    if (closestStop) {
+      const walkMin = Math.max(1, Math.round(minDistance / 80));
+      state.walkingMinutes = walkMin;
+
+      if (dom.gpsStatusNote) {
+        dom.gpsStatusNote.innerHTML = `📍 <strong>${locationLabel}</strong> • a <strong>${Math.round(minDistance)}m</strong> da <em>${closestStop.stop_name}</em> (~${walkMin} min a piedi)<br><small style="color:#5F6368; font-size:11px;">💡 Trascina il punto blu sulla mappa per spostarti</small>`;
+        dom.gpsStatusNote.style.display = 'block';
       }
 
-      const userIcon = L.divIcon({
-        html: `<div class="user-location-dot"></div>`,
-        className: 'user-loc-wrapper',
-        iconSize: [16, 16],
-        iconAnchor: [8, 8]
-      });
+      selectStop(closestStop.stop_id, false);
 
-      state.userGpsMarker = L.marker([userLat, userLon], { icon: userIcon, zIndexOffset: 2000 })
-        .bindPopup(`<strong>La tua posizione</strong>${isSimulated ? '<br><small>(Centro Cesena)</small>' : ''}`, { offset: [0, -6] })
-        .addTo(state.layers.userGroup);
-
-      // Cerca la fermata più vicina
-      const curStops = state.staticData?.routes_by_direction?.[String(state.currentDirection)]?.stops || [];
-      let closestStop = null;
-      let minDistance = Infinity;
-
-      curStops.forEach(s => {
-        const d = haversineDistanceMeters(userLat, userLon, s.lat, s.lon);
-        if (d < minDistance) {
-          minDistance = d;
-          closestStop = s;
-        }
-      });
-
-      if (closestStop) {
-        // Calcolo silenzioso automatico dei minuti a piedi (~80 m/min = 4.8 km/h)
-        const walkMin = Math.max(1, Math.round(minDistance / 80));
-        state.walkingMinutes = walkMin;
-
-        dom.gpsStatusNote.innerHTML = `📍 Sei a <strong>${minDistance}m</strong> dalla fermata (~${walkMin} min a piedi)`;
-        dom.gpsStatusNote.style.display = 'block';
-
-        selectStop(closestStop.stop_id, false);
-
-        // Inquadra sia utente che fermata
+      if (shouldFitBounds && state.map) {
         const bounds = L.latLngBounds([
           [userLat, userLon],
           [closestStop.lat, closestStop.lon]
         ]);
         state.map.fitBounds(bounds, { padding: [60, 60], maxZoom: 16 });
       }
-    };
+    }
+  }
 
+  function handleNearMe() {
     if ('geolocation' in navigator) {
       navigator.geolocation.getCurrentPosition(
-        (pos) => handleSuccess(pos.coords.latitude, pos.coords.longitude, false),
-        (err) => {
-          console.warn('Geolocalizzazione non concessa o errore, fallback centro Cesena:', err.message);
-          handleSuccess(44.1375, 12.2435, true);
+        (pos) => {
+          // Se la geolocalizzazione desktop ha scarsa precisione (> 300 metri, tipico dell'IP provider)
+          if (!pos?.coords || pos.coords.accuracy > 300) {
+            console.log(`GPS desktop poco accurato (${Math.round(pos?.coords?.accuracy || 0)}m). Default al Campus Universitario.`);
+            setUserPosition(CONFIG.CAMPUS_CESENA[0], CONFIG.CAMPUS_CESENA[1], 'Campus Universitario');
+          } else {
+            setUserPosition(pos.coords.latitude, pos.coords.longitude, 'La tua posizione (GPS)');
+          }
         },
-        { enableHighAccuracy: true, timeout: 6000, maximumAge: 10000 }
+        (err) => {
+          console.warn('Geolocalizzazione non concessa o errore, default al Campus Universitario:', err.message);
+          setUserPosition(CONFIG.CAMPUS_CESENA[0], CONFIG.CAMPUS_CESENA[1], 'Campus Universitario');
+        },
+        { enableHighAccuracy: true, timeout: 5000, maximumAge: 10000 }
       );
     } else {
-      handleSuccess(44.1375, 12.2435, true);
+      setUserPosition(CONFIG.CAMPUS_CESENA[0], CONFIG.CAMPUS_CESENA[1], 'Campus Universitario');
     }
   }
 
@@ -829,6 +878,7 @@
     initMap();
     setupEventListeners();
     await loadStaticData();
+    handleNearMe(); // Rileva posizione utente (o posiziona al Campus Universitario con punto blu interattivo)
     await fetchLiveBuses();
 
     // Polling periodico
