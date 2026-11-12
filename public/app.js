@@ -87,12 +87,25 @@
     // Zoom controls posizionati in basso a destra stile Google Maps
     L.control.zoom({ position: 'bottomright' }).addTo(state.map);
 
-    // Layer OpenStreetMap con filtro CSS stile Google Maps
+    // Layer CartoDB Voyager predefinito (stile Google Maps Transit pulito senza api key)
+    const voyagerLayer = L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', {
+      attribution: '&copy; <a href="https://carto.com/">CARTO</a> &copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
+      subdomains: 'abcd',
+      maxZoom: 19
+    }).addTo(state.map);
+
+    // Layer OpenStreetMap di fallback
     const osmStandard = L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
       attribution: '&copy; <a href="https://www.openstreetmap.org/copyright" target="_blank">OpenStreetMap</a> contributors',
       maxZoom: 19,
       className: 'osm-tile-layer'
-    }).addTo(state.map);
+    });
+
+    // Controllo layer mappa in alto a destra
+    L.control.layers({
+      'Mappa Transit (CartoDB)': voyagerLayer,
+      'OpenStreetMap': osmStandard
+    }, null, { position: 'topright' }).addTo(state.map);
 
     // Gruppi di Layer ordinati
     state.layers.routesGroup = L.layerGroup().addTo(state.map);
@@ -134,68 +147,69 @@
     state.layers.dir0Polylines = [];
     state.layers.dir1Polylines = [];
 
-    // USA DIRETTAMENTE L'ARRAY AD ALTA RISOLUZIONE OSRM (300+ PUNTI)
+    // USA DIRETTAMENTE L'ARRAY AD ALTA RISOLUZIONE CURVA PER CURVA (218 vertici)
     const shape0 = data.shape_dir_0 || data.routes_by_direction?.['0']?.shape || [];
     const shape1 = data.shape_dir_1 || data.routes_by_direction?.['1']?.shape || [];
 
-    // Polilinea Direzione 0 (Montefiore - Blu Google Maps con bordo bianco)
+    // Polilinea Direzione 0 (Montefiore - Tracciato generale celeste chiaro con bordo bianco)
     if (shape0.length > 0) {
       const casing = L.polyline(shape0, {
         color: '#FFFFFF',
         weight: 8,
-        opacity: 0.95,
+        opacity: 0.9,
         lineCap: 'round',
         lineJoin: 'round'
-      }).addTo(state.layers.routesGroup);
+      });
 
       const line = L.polyline(shape0, {
-        color: CONFIG.COLOR_DIR0,
+        color: '#93C5FD',
         weight: 5,
         opacity: 0.95,
         lineCap: 'round',
         lineJoin: 'round'
-      }).addTo(state.layers.routesGroup);
+      });
 
       state.layers.dir0Polylines.push(casing, line);
     }
 
-    // Polilinea Direzione 1 (Rio Maggiore - Verde Transit con bordo bianco)
+    // Polilinea Direzione 1 (Rio Maggiore - Tracciato generale celeste chiaro con bordo bianco)
     if (shape1.length > 0) {
       const casing = L.polyline(shape1, {
         color: '#FFFFFF',
-        weight: 7,
-        opacity: 0.85,
+        weight: 8,
+        opacity: 0.9,
         lineCap: 'round',
         lineJoin: 'round'
-      }).addTo(state.layers.routesGroup);
+      });
 
       const line = L.polyline(shape1, {
-        color: CONFIG.COLOR_DIR1,
-        weight: 4,
-        dashArray: '8, 6',
-        opacity: 0.85,
+        color: '#93C5FD',
+        weight: 5,
+        opacity: 0.95,
         lineCap: 'round',
         lineJoin: 'round'
-      }).addTo(state.layers.routesGroup);
+      });
 
       state.layers.dir1Polylines.push(casing, line);
     }
+
+    updateMapVisualHierarchy();
   }
 
   function renderStops(data) {
     state.layers.stopsGroup.clearLayers();
     state.stopsMarkersMap.clear();
 
-    const drawStopsForDir = (stops, dirId, color) => {
+    const drawStopsForDir = (stops, dirId) => {
       if (!stops) return;
       stops.forEach((stop, index) => {
         const isTerminus = (index === 0 || index === stops.length - 1);
 
-        // Marker pulito senza cartellini fissi che coprono la mappa!
+        // Cerchio pulito stile Google Maps: bianco con bordo blu 2.5px
         const marker = L.circleMarker([stop.lat, stop.lon], {
-          radius: isTerminus ? 6.5 : 4.5,
-          fillColor: isTerminus ? color : '#FFFFFF',
-          color: isTerminus ? '#FFFFFF' : color,
+          radius: isTerminus ? 6 : 5,
+          fillColor: isTerminus ? '#1A73E8' : '#FFFFFF',
+          color: '#1A73E8',
           weight: 2.5,
           opacity: 1,
           fillOpacity: 1,
@@ -210,7 +224,7 @@
           selectStop(stop.stop_id, true);
         });
 
-        // Tooltip solo su HOVER del mouse (nessun cartellino fisso invadente!)
+        // Tooltip solo su HOVER del mouse (nessun cartellino fisso invasivo!)
         marker.bindTooltip(stop.stop_name, {
           permanent: false,
           direction: 'top',
@@ -221,15 +235,14 @@
         marker.directionId = String(dirId);
         marker.stopData = stop;
         state.stopsMarkersMap.set(stop.stop_id, marker);
-        marker.addTo(state.layers.stopsGroup);
       });
     };
 
     const dir0 = data.routes_by_direction?.['0'];
     const dir1 = data.routes_by_direction?.['1'];
 
-    if (dir0?.stops) drawStopsForDir(dir0.stops, '0', CONFIG.COLOR_DIR0);
-    if (dir1?.stops) drawStopsForDir(dir1.stops, '1', CONFIG.COLOR_DIR1);
+    if (dir0?.stops) drawStopsForDir(dir0.stops, '0');
+    if (dir1?.stops) drawStopsForDir(dir1.stops, '1');
 
     updateMapVisualHierarchy();
   }
@@ -237,18 +250,29 @@
   function updateMapVisualHierarchy() {
     const curDir = String(state.currentDirection);
 
-    // Evidenzia la polilinea della direzione corrente
-    state.layers.dir0Polylines.forEach(l => l.setStyle({ opacity: curDir === '0' ? 0.95 : 0.2 }));
-    state.layers.dir1Polylines.forEach(l => l.setStyle({ opacity: curDir === '1' ? 0.9 : 0.2 }));
+    // Mostra SOLO la direzione selezionata (nasconde del tutto l'altra rotta)
+    state.layers.dir0Polylines.forEach(l => {
+      if (curDir === '0') {
+        if (!state.layers.routesGroup.hasLayer(l)) state.layers.routesGroup.addLayer(l);
+      } else {
+        if (state.layers.routesGroup.hasLayer(l)) state.layers.routesGroup.removeLayer(l);
+      }
+    });
 
-    // Aggiorna visibilità marker fermate
-    state.layers.stopsGroup.eachLayer(marker => {
-      if (marker.directionId) {
-        const isCur = marker.directionId === curDir;
-        marker.setStyle({
-          opacity: isCur ? 1 : 0.2,
-          fillOpacity: isCur ? 1 : 0.15
-        });
+    state.layers.dir1Polylines.forEach(l => {
+      if (curDir === '1') {
+        if (!state.layers.routesGroup.hasLayer(l)) state.layers.routesGroup.addLayer(l);
+      } else {
+        if (state.layers.routesGroup.hasLayer(l)) state.layers.routesGroup.removeLayer(l);
+      }
+    });
+
+    // Mostra SOLO le fermate della direzione corrente
+    state.stopsMarkersMap.forEach(marker => {
+      if (marker.directionId === curDir) {
+        if (!state.layers.stopsGroup.hasLayer(marker)) state.layers.stopsGroup.addLayer(marker);
+      } else {
+        if (state.layers.stopsGroup.hasLayer(marker)) state.layers.stopsGroup.removeLayer(marker);
       }
     });
   }
@@ -303,6 +327,7 @@
     if (nextStop) {
       selectStop(nextStop.stop_id, true);
     }
+    fetchLiveBuses();
   }
 
   function selectStop(stopId, shouldPan = true) {
@@ -334,14 +359,17 @@
 
     const icon = L.divIcon({
       html: `
-        <div class="user-stop-pin" title="La tua fermata: ${stop.stop_name}">
-          <div class="user-stop-halo"></div>
-          <div class="user-stop-center-dot"></div>
+        <div class="user-stop-pin-container">
+          <div class="user-stop-banner">La tua fermata: <strong>${stop.stop_name}</strong></div>
+          <div class="user-stop-pin-icon">
+            <div class="user-stop-halo"></div>
+            <div class="user-stop-center-dot"></div>
+          </div>
         </div>
       `,
       className: 'user-stop-div-icon',
-      iconSize: [24, 24],
-      iconAnchor: [12, 12]
+      iconSize: [220, 52],
+      iconAnchor: [110, 44]
     });
 
     state.userSelectedStopMarker = L.marker([stop.lat, stop.lon], {
@@ -544,7 +572,7 @@
   }
 
   /* ==========================================================================
-     6. TRACCIATO STRADALE DI AVVICINAMENTO SULLA MAPPA
+     6. TRACCIATO STRADALE DI AVVICINAMENTO SULLA MAPPA (BLU VIBRANTE 7PX)
      ========================================================================== */
   function updateApproachingRouteHighlight(arrivalsData) {
     state.layers.approachingGroup.clearLayers();
@@ -555,33 +583,51 @@
     const dirData = state.staticData?.routes_by_direction?.[String(state.currentDirection)];
     if (!dirData) return;
 
-    const userStopIndex = dirData.stops.findIndex(s => s.stop_id === state.selectedStopId);
-    if (userStopIndex <= 0) return;
+    const userStop = dirData.stops.find(s => s.stop_id === state.selectedStopId);
+    if (!userStop || userStop.shape_index === undefined) return;
 
-    const segments = dirData.segments || [];
-    const busLoc = firstBus.live_location;
-    const approachingPoints = [[busLoc.lat, busLoc.lon]];
+    const fullShape = dirData.shape || [];
+    if (fullShape.length === 0) return;
 
-    for (let i = 0; i < userStopIndex && i < segments.length; i++) {
-      const seg = segments[i];
-      if (seg && (seg.segment_coords || seg.path)) {
-        approachingPoints.push(...(seg.segment_coords || seg.path));
+    // Trova il vertice della polilinea più vicino alla posizione live del bus
+    let bestBusVertex = 0;
+    let minD = Infinity;
+    fullShape.forEach((pt, idx) => {
+      const d = haversineDistanceMeters(firstBus.live_location.lat, firstBus.live_location.lon, pt[0], pt[1]);
+      if (d < minD) {
+        minD = d;
+        bestBusVertex = idx;
       }
+    });
+
+    let approachingPoints = [];
+    if (bestBusVertex <= userStop.shape_index) {
+      approachingPoints = [
+        [firstBus.live_location.lat, firstBus.live_location.lon],
+        ...fullShape.slice(bestBusVertex, userStop.shape_index + 1)
+      ];
+    } else {
+      approachingPoints = [
+        [firstBus.live_location.lat, firstBus.live_location.lon],
+        [userStop.lat, userStop.lon]
+      ];
     }
 
     if (approachingPoints.length > 1) {
+      // Casing bianco
       L.polyline(approachingPoints, {
         color: '#FFFFFF',
-        weight: 8,
+        weight: 10,
         opacity: 0.95,
         lineCap: 'round',
         lineJoin: 'round'
       }).addTo(state.layers.approachingGroup);
 
+      // Tratto attivo blu Google Maps vibrante (7px)
       L.polyline(approachingPoints, {
-        color: CONFIG.APPROACHING_COLOR,
-        weight: 5,
-        opacity: 0.95,
+        color: '#1A73E8',
+        weight: 7,
+        opacity: 1,
         lineCap: 'round',
         lineJoin: 'round'
       }).addTo(state.layers.approachingGroup);
@@ -592,28 +638,40 @@
      7. MOTORE DI ANIMAZIONE 60FPS E MARKER AUTOBUS LIVE STILE GOOGLE MAPS
      ========================================================================== */
   function createBusDivIcon(bus) {
-    const isDir1 = bus.direction_id === 1;
+    const isDir1 = Number(bus.direction_id) === 1;
     const dirClass = isDir1 ? 'dir-1' : 'dir-0';
     const bearing = bus.bearing || 0;
+
+    let etaBadgeText = 'Bus 6 • in marcia';
+    if (bus.status === 'STOPPED_AT') {
+      etaBadgeText = 'Bus 6 • In fermata';
+    } else if (bus.eta_minutes !== undefined && bus.eta_minutes !== null) {
+      etaBadgeText = bus.eta_minutes <= 1 ? 'Bus 6 • In arrivo' : `Bus 6 • tra ${bus.eta_minutes} min`;
+    }
 
     const html = `
       <div class="gmaps-bus-marker ${dirClass}" id="marker-${bus.id}">
         <div class="gmaps-bus-radar-ring"></div>
         <div class="gmaps-bus-arrow" style="transform: rotate(${bearing}deg);">
           <svg width="8" height="8" viewBox="0 0 10 10">
-            <polygon points="5,0 10,10 5,7 0,10" fill="#202124"/>
+            <polygon points="5,0 10,10 5,7 0,10" fill="#1A73E8"/>
           </svg>
         </div>
         <div class="gmaps-bus-core" title="${bus.vehicle_label}">
           <span>6</span>
         </div>
-        <div class="gmaps-bus-eta-tag">${bus.speed_kmh > 0 ? `${bus.speed_kmh} km/h` : 'In fermata'}</div>
+        <div class="gmaps-bus-eta-badge">${etaBadgeText}</div>
       </div>
     `;
 
     return L.divIcon({
       html,
       className: 'gmaps-bus-div-icon',
+      iconSize: [40, 40],
+      iconAnchor: [20, 20],
+      popupAnchor: [0, -20]
+    });
+  }
       iconSize: [40, 40],
       iconAnchor: [20, 20],
       popupAnchor: [0, -20]
@@ -692,9 +750,12 @@
   }
 
   function syncBusMarkers(buses) {
-    const incomingIds = new Set(buses.map(b => b.id));
+    const curDir = Number(state.currentDirection);
+    // Mostra SOLO i bus appartenenti alla direzione selezionata dall'utente
+    const filteredBuses = (buses || []).filter(b => Number(b.direction_id) === curDir);
+    const incomingIds = new Set(filteredBuses.map(b => b.id));
 
-    // Rimuovi bus non più attivi
+    // Rimuovi bus non più attivi o dell'altra direzione
     for (const [id, busState] of state.busesMap.entries()) {
       if (!incomingIds.has(id)) {
         if (busState.rafId) cancelAnimationFrame(busState.rafId);
@@ -703,7 +764,7 @@
       }
     }
 
-    buses.forEach(bus => {
+    filteredBuses.forEach(bus => {
       let busState = state.busesMap.get(bus.id);
 
       if (!busState) {
