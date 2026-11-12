@@ -87,25 +87,17 @@
     // Zoom controls posizionati in basso a destra stile Google Maps
     L.control.zoom({ position: 'bottomright' }).addTo(state.map);
 
-    // Layer CartoDB Voyager predefinito (stile Google Maps Transit pulito senza api key)
-    const voyagerLayer = L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', {
-      attribution: '&copy; <a href="https://carto.com/">CARTO</a> &copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
-      subdomains: 'abcd',
-      maxZoom: 19
-    }).addTo(state.map);
-
-    // Layer OpenStreetMap di fallback
-    const osmStandard = L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    // TileLayer OpenStreetMap Standard ufficiale 100% gratuito e stabile
+    L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
       attribution: '&copy; <a href="https://www.openstreetmap.org/copyright" target="_blank">OpenStreetMap</a> contributors',
       maxZoom: 19,
       className: 'osm-tile-layer'
-    });
+    }).addTo(state.map);
 
-    // Controllo layer mappa in alto a destra
-    L.control.layers({
-      'Mappa Transit (CartoDB)': voyagerLayer,
-      'OpenStreetMap': osmStandard
-    }, null, { position: 'topright' }).addTo(state.map);
+    // Forza il rendering immediato delle tile per evitare schermate grigie
+    setTimeout(() => {
+      if (state.map) state.map.invalidateSize();
+    }, 200);
 
     // Gruppi di Layer ordinati
     state.layers.routesGroup = L.layerGroup().addTo(state.map);
@@ -130,8 +122,8 @@
       populateStopsDropdown(state.currentDirection);
 
       // Seleziona la prima fermata (o Cesena Stazione FS)
-      const currentStops = data.routes_by_direction?.[String(state.currentDirection)]?.stops || [];
-      const defaultStop = currentStops.find(s => s.stop_id === 'CE_6011' || s.stop_name.toLowerCase().includes('stazione')) || currentStops[0];
+      const currentStops = data.routes_by_direction?.[String(state.currentDirection)]?.stops || data.stops || [];
+      const defaultStop = currentStops.find(s => s.stop_id === 'CE_6011' || s.stop_name?.toLowerCase().includes('stazione')) || currentStops[0];
       if (defaultStop) {
         selectStop(defaultStop.stop_id, false);
       }
@@ -294,8 +286,12 @@
      3. SELEZIONE DIREZIONE & POPOLAMENTO FERMATE
      ========================================================================== */
   function populateStopsDropdown(directionId) {
-    if (!state.staticData) return;
-    const stops = state.staticData.routes_by_direction?.[String(directionId)]?.stops || [];
+    if (!state.staticData || !dom.stopSelect) return;
+    const dirKey = String(directionId);
+    let stops = state.staticData.routes_by_direction?.[dirKey]?.stops;
+    if (!stops || stops.length === 0) {
+      stops = state.staticData.stops || [];
+    }
     dom.stopSelect.innerHTML = '';
 
     stops.forEach(s => {
@@ -672,11 +668,6 @@
       popupAnchor: [0, -20]
     });
   }
-      iconSize: [40, 40],
-      iconAnchor: [20, 20],
-      popupAnchor: [0, -20]
-    });
-  }
 
   function shortestAngleDiff(targetDeg, currentDeg) {
     return ((((targetDeg - currentDeg) % 360) + 540) % 360) - 180;
@@ -818,23 +809,20 @@
      9. EVENT LISTENERS & SETUP
      ========================================================================== */
   function setupEventListeners() {
-    dom.dirTab0.addEventListener('click', () => switchDirection(0));
-    dom.dirTab1.addEventListener('click', () => switchDirection(1));
+    dom.dirTab0?.addEventListener('click', () => switchDirection(0));
+    dom.dirTab1?.addEventListener('click', () => switchDirection(1));
 
-    dom.stopSelect.addEventListener('change', (e) => {
+    dom.stopSelect?.addEventListener('change', (e) => {
       selectStop(e.target.value, true);
     });
 
-    if (dom.nearMeBtn) dom.nearMeBtn.addEventListener('click', handleNearMe);
-    if (dom.floatingNearMeBtn) dom.floatingNearMeBtn.addEventListener('click', handleNearMe);
+    dom.nearMeBtn?.addEventListener('click', handleNearMe);
+    dom.floatingNearMeBtn?.addEventListener('click', handleNearMe);
+    dom.fitRouteBtn?.addEventListener('click', fitRouteBounds);
 
-    if (dom.fitRouteBtn) dom.fitRouteBtn.addEventListener('click', fitRouteBounds);
-
-    if (dom.toggleCollapseBtn) {
-      dom.toggleCollapseBtn.addEventListener('click', () => {
-        dom.transitCard.classList.toggle('collapsed');
-      });
-    }
+    dom.toggleCollapseBtn?.addEventListener('click', () => {
+      dom.transitCard?.classList.toggle('collapsed');
+    });
   }
 
   async function init() {

@@ -30,8 +30,10 @@
 }
 
 html, body {
-  width: 100vw;
-  height: 100vh;
+  margin: 0;
+  padding: 0;
+  width: 100%;
+  height: 100%;
   overflow: hidden;
   font-family: var(--font-family);
   color: var(--gm-gray-900);
@@ -43,9 +45,8 @@ html, body {
    Mappa Leaflet a Tutto Schermo (100vw x 100vh)
    ========================================================================== */
 #map {
-  position: absolute;
-  top: 0;
-  left: 0;
+  position: fixed;
+  inset: 0;
   width: 100vw;
   height: 100vh;
   z-index: 1;

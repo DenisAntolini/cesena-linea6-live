@@ -59,8 +59,8 @@
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" 
         integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="">
 
-  <!-- App Styles (Google Maps Transit Theme) -->
-  <link rel="stylesheet" href="style.css">
+  <!-- App Styles (Google Maps Transit Theme con cache-busting) -->
+  <link rel="stylesheet" href="/style.css?v=fix2">
 </head>
 <body>
 
@@ -152,16 +152,19 @@
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" 
           integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
   
-  <!-- App JS -->
-  <script src="app.js"></script>
+  <!-- App JS (con cache-busting per forzare aggiornamento immediato) -->
+  <script src="/app.js?v=fix2"></script>
 
-  <!-- PWA Service Worker Registration -->
+  <!-- Rimozione forzata vecchie cache e disattivazione Service Worker -->
   <script>
     if ('serviceWorker' in navigator) {
-      window.addEventListener('load', () => {
-        navigator.serviceWorker.register('/sw.js')
-          .then((reg) => console.log('[PWA] Service Worker attivo:', reg.scope))
-          .catch((err) => console.warn('[PWA] Service Worker non registrato:', err));
+      navigator.serviceWorker.getRegistrations().then(regs => {
+        regs.forEach(r => r.unregister());
+      });
+    }
+    if ('caches' in window) {
+      caches.keys().then(keys => {
+        keys.forEach(k => caches.delete(k));
       });
     }
   </script>
