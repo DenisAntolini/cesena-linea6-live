@@ -97,8 +97,8 @@ app.get('/api/linea6/static', (req, res) => {
 // Endpoint 2: Posizioni realtime autobus (compatibile sia con Serverless sia con daemon locale)
 app.get('/api/linea6/live', async (req, res) => {
   const now = Date.now();
-  // Se la cache in memoria è vuota o ha più di 10 secondi (tipico in Vercel Serverless), aggiorna prima di rispondere
-  if (!liveCache.last_updated_ms || (now - liveCache.last_updated_ms > 10000) || !liveCache.buses || liveCache.buses.length === 0) {
+  // Se la cache in memoria è vuota o ha più di 15 secondi (tipico in Vercel Serverless), aggiorna prima di rispondere
+  if (!liveCache.last_updated_ms || (now - liveCache.last_updated_ms > 15000) || !liveCache.buses || liveCache.buses.length === 0) {
     await refreshLiveCache();
   }
 
@@ -151,8 +151,8 @@ app.get('/api/linea6/arrivals', async (req, res) => {
       return res.status(400).json({ error: 'Parametro stop_id mancante' });
     }
 
-    // In ambiente Serverless aggiorna se cache vuota o > 10s
-    if (!liveCache.last_updated_ms || (Date.now() - liveCache.last_updated_ms > 10000)) {
+    // In ambiente Serverless aggiorna se cache vuota o > 15s
+    if (!liveCache.last_updated_ms || (Date.now() - liveCache.last_updated_ms > 15000) || !liveCache.buses || liveCache.buses.length === 0) {
       await refreshLiveCache();
     }
 
@@ -188,13 +188,17 @@ app.get('/api/linea6/arrivals', async (req, res) => {
 });
 
 // Alias e compatibilità retroattiva per /api/linea6/arrivals/:stopId
-app.get('/api/linea6/arrivals/:stopId', (req, res) => {
+app.get('/api/linea6/arrivals/:stopId', async (req, res) => {
   try {
     const { stopId } = req.params;
     const directionId = req.query.direction;
     const userLat = req.query.user_lat;
     const userLon = req.query.user_lon;
     const walkingMinutesParam = req.query.walking_minutes;
+
+    if (!liveCache.last_updated_ms || (Date.now() - liveCache.last_updated_ms > 15000) || !liveCache.buses || liveCache.buses.length === 0) {
+      await refreshLiveCache();
+    }
 
     const staticData = getStaticData();
     const liveBuses = (liveCache && liveCache.buses && liveCache.buses.length > 0)
