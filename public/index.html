@@ -1,172 +1,1200 @@
 <!DOCTYPE html>
 <html lang="it">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-  <meta name="theme-color" content="#1A73E8">
-  
-  <!-- SEO Primary Meta Tags -->
-  <title>Linea 6 Cesena Live - Posizione Autobus in Tempo Reale | Start Romagna</title>
-  <meta name="title" content="Linea 6 Cesena Live - Posizione Autobus in Tempo Reale | Start Romagna">
-  <meta name="description" content="Traccia in tempo reale gli autobus della Linea 6 di Cesena (Rio Maggiore - Stazione FS - Ospedale Bufalini - Montefiore). Mappa interattiva Google Maps style, posizione GPS e orari dei prossimi passaggi.">
-  <meta name="keywords" content="Cesena, Linea 6, autobus, Start Romagna, tempo reale, orari bus, GPS live, Stazione Cesena, Ospedale Bufalini, Montefiore">
-  <meta name="robots" content="index, follow">
-  <link rel="canonical" href="https://cesena-linea6.onrender.com/">
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <title>Linea 6 Cesena Live • Posizione Autobus in Tempo Reale | Start Romagna</title>
+  <meta name="description" content="Mappa interattiva in tempo reale della Linea 6 di Cesena (Rio Maggiore - Campus Universitario - Stazione FS - Ospedale Bufalini - Montefiore)." />
 
-  <!-- Open Graph / Facebook / WhatsApp / Telegram -->
-  <meta property="og:type" content="website">
-  <meta property="og:url" content="https://cesena-linea6.onrender.com/">
-  <meta property="og:title" content="Linea 6 Cesena Live - Posizione Autobus in Tempo Reale">
-  <meta property="og:description" content="Guarda dove sono i bus della Linea 6 a Cesena in tempo reale lungo la strada vera. Verifica se fai in tempo alla fermata!">
-  <meta property="og:image" content="https://cesena-linea6.onrender.com/icon.svg">
+  <!-- Tailwind CSS -->
+  <script src="https://cdn.tailwindcss.com"></script>
 
-  <!-- Twitter -->
-  <meta property="twitter:card" content="summary_large_image">
-  <meta property="twitter:url" content="https://cesena-linea6.onrender.com/">
-  <meta property="twitter:title" content="Linea 6 Cesena Live - Posizione Autobus in Tempo Reale">
-  <meta property="twitter:description" content="Mappa live GPS e orari di arrivo autobus Linea 6 Start Romagna a Cesena.">
-  <meta property="twitter:image" content="https://cesena-linea6.onrender.com/icon.svg">
+  <!-- Google Fonts: Inter / Roboto -->
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
 
-  <!-- Structured Data JSON-LD -->
-  <script type="application/ld+json">
-  {
-    "@context": "https://schema.org",
-    "@type": "WebApplication",
-    "name": "Cesena Linea 6 Live",
-    "url": "https://cesena-linea6.onrender.com/",
-    "applicationCategory": "TravelApplication",
-    "operatingSystem": "All",
-    "description": "Applicazione di tracciamento GPS in tempo reale per la Linea 6 degli autobus di Cesena (Start Romagna).",
-    "offers": {
-      "@type": "Offer",
-      "price": "0",
-      "priceCurrency": "EUR"
+  <!-- Leaflet 1.9.4 CSS -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin="" />
+
+  <style>
+    * {
+      box-sizing: border-box;
+      -webkit-tap-highlight-color: transparent;
     }
-  }
-  </script>
-  
-  <!-- PWA Manifest & Icons -->
-  <link rel="manifest" href="/manifest.json">
-  <link rel="icon" type="image/svg+xml" href="/icon.svg">
-  <link rel="apple-touch-icon" href="/icon.svg">
-  
-  <!-- Font Google Roboto & Google Sans style -->
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700;900&display=swap" rel="stylesheet">
-  
-  <!-- Leaflet CSS -->
-  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" 
-        integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="">
+    html, body {
+      margin: 0;
+      padding: 0;
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+      background: #e5e7eb;
+    }
 
-  <!-- App Styles (Google Maps Transit Theme con cache-busting) -->
-  <link rel="stylesheet" href="/style.css?v=fix3">
+    /* Mappa Full Screen */
+    #map {
+      position: fixed;
+      inset: 0;
+      width: 100vw;
+      height: 100vh;
+      z-index: 1;
+    }
+
+    /* Filtro stile Google Maps Transit sulle tile OSM */
+    .gmaps-tiles {
+      filter: saturate(0.88) contrast(0.98) brightness(1.02);
+    }
+
+    /* Pannello Fluttuante Stile Google Maps */
+    .gmaps-panel {
+      position: fixed;
+      top: 16px;
+      left: 16px;
+      width: 375px;
+      max-width: calc(100vw - 32px);
+      max-height: calc(100vh - 32px);
+      overflow-y: auto;
+      background: rgba(255, 255, 255, 0.98);
+      backdrop-filter: blur(12px);
+      border-radius: 20px;
+      box-shadow: 0 10px 30px rgba(15, 23, 42, 0.16), 0 2px 6px rgba(15, 23, 42, 0.08);
+      z-index: 1000;
+      border: 1px solid rgba(226, 232, 240, 0.9);
+      transition: transform 0.3s cubic-bezier(0.22, 1, 0.36, 1);
+    }
+
+    @media (max-width: 640px) {
+      .gmaps-panel {
+        top: auto;
+        bottom: 0;
+        left: 0;
+        right: 0;
+        width: 100vw;
+        max-width: 100vw;
+        max-height: 64vh;
+        border-radius: 22px 22px 0 0;
+      }
+      .gmaps-panel.collapsed {
+        transform: translateY(calc(100% - 86px));
+      }
+    }
+
+    /* Punto Blu Utente Stile Google Maps */
+    .user-blue-dot-wrapper {
+      position: relative;
+      width: 22px;
+      height: 22px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      cursor: grab;
+    }
+    .user-blue-dot-wrapper:active {
+      cursor: grabbing;
+    }
+    .user-blue-halo {
+      position: absolute;
+      width: 44px;
+      height: 44px;
+      border-radius: 9999px;
+      background: rgba(26, 115, 232, 0.22);
+      animation: userPulse 2.2s infinite ease-out;
+      pointer-events: none;
+    }
+    .user-blue-core {
+      position: relative;
+      width: 16px;
+      height: 16px;
+      border-radius: 9999px;
+      background: #1A73E8;
+      border: 3px solid #FFFFFF;
+      box-shadow: 0 2px 6px rgba(0, 0, 0, 0.35);
+      z-index: 2;
+    }
+    @keyframes userPulse {
+      0% { transform: scale(0.5); opacity: 0.9; }
+      100% { transform: scale(1.65); opacity: 0; }
+    }
+
+    /* Pin Fermata Selezionata dall'Utente */
+    .selected-stop-wrapper {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      pointer-events: none;
+    }
+    .selected-stop-label {
+      background: #0f172a;
+      color: #ffffff;
+      font-size: 11px;
+      font-weight: 600;
+      padding: 4px 10px;
+      border-radius: 9999px;
+      white-space: nowrap;
+      box-shadow: 0 4px 12px rgba(15, 23, 42, 0.25);
+      border: 1.5px solid #ffffff;
+      margin-bottom: 4px;
+    }
+    .selected-stop-dot {
+      width: 16px;
+      height: 16px;
+      border-radius: 9999px;
+      background: #E30613;
+      border: 3px solid #ffffff;
+      box-shadow: 0 2px 8px rgba(227, 6, 19, 0.5);
+    }
+
+    /* Marker Autobus Live Stile Google Maps */
+    .bus-live-wrapper {
+      position: relative;
+      width: 46px;
+      height: 46px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .bus-radar-wave {
+      position: absolute;
+      width: 44px;
+      height: 44px;
+      border-radius: 9999px;
+      background: rgba(22, 163, 74, 0.28);
+      animation: busRadar 1.9s infinite ease-out;
+      pointer-events: none;
+    }
+    @keyframes busRadar {
+      0% { transform: scale(0.7); opacity: 0.9; }
+      100% { transform: scale(1.6); opacity: 0; }
+    }
+    .bus-compass-ring {
+      position: absolute;
+      inset: 0;
+      display: flex;
+      justify-content: center;
+      align-items: flex-start;
+      pointer-events: none;
+      transition: transform 0.15s linear;
+    }
+    .bus-heading-arrow {
+      width: 0;
+      height: 0;
+      border-left: 6px solid transparent;
+      border-right: 6px solid transparent;
+      border-bottom: 9px solid #1e293b;
+      margin-top: -4px;
+      filter: drop-shadow(0 1px 2px rgba(255,255,255,0.9));
+    }
+    .bus-circle-body {
+      position: relative;
+      width: 32px;
+      height: 32px;
+      border-radius: 9999px;
+      background: #1A73E8;
+      border: 2.5px solid #ffffff;
+      color: #ffffff;
+      font-weight: 800;
+      font-size: 13px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      box-shadow: 0 4px 10px rgba(26, 115, 232, 0.45);
+      z-index: 3;
+    }
+    .bus-circle-body.is-primary {
+      background: #E30613;
+      box-shadow: 0 4px 12px rgba(227, 6, 19, 0.55);
+    }
+    .bus-pill-tag {
+      position: absolute;
+      top: 38px;
+      background: #ffffff;
+      color: #0f172a;
+      font-size: 10.5px;
+      font-weight: 700;
+      padding: 2px 7px;
+      border-radius: 9999px;
+      white-space: nowrap;
+      box-shadow: 0 2px 6px rgba(15, 23, 42, 0.2);
+      border: 1px solid #cbd5e1;
+      z-index: 4;
+    }
+
+    /* Tooltip pulito al passaggio del mouse sulle fermate */
+    .leaflet-tooltip.clean-stop-tooltip {
+      background: #0f172a;
+      color: #ffffff;
+      border: none;
+      border-radius: 8px;
+      padding: 4px 8px;
+      font-size: 11.5px;
+      font-weight: 600;
+      box-shadow: 0 4px 10px rgba(0, 0, 0, 0.2);
+    }
+    .leaflet-tooltip.clean-stop-tooltip::before {
+      border-top-color: #0f172a;
+    }
+  </style>
 </head>
 <body>
 
-  <!-- Mappa a Tutto Schermo (100vw x 100vh) -->
+  <!-- Mappa Full-Screen -->
   <div id="map"></div>
 
-  <!-- Card Fluttuante Google Maps Transit (Top-Left su Desktop, Bottom Sheet su Mobile) -->
-  <aside class="gmaps-card" id="transitCard">
-    <!-- Intestazione Card Google Maps -->
-    <div class="card-header">
-      <div class="header-transit-badge">
-        <span class="line-badge-num">6</span>
-        <div class="header-info">
-          <h1 class="header-title">Linea 6 • Cesena</h1>
-          <div class="header-live-indicator">
-            <span class="live-dot-pulse"></span>
-            <span class="live-text">GPS IN TEMPO REALE</span>
+  <!-- Card Fluttuante Google Maps Transit -->
+  <aside id="transitPanel" class="gmaps-panel p-4">
+    <!-- Maniglia mobile per ridurre/espandere -->
+    <div id="mobileHandle" class="sm:hidden w-full flex justify-center pb-2 cursor-pointer">
+      <div class="w-10 h-1.5 bg-slate-300 rounded-full"></div>
+    </div>
+
+    <!-- Header Linea 6 Start Romagna -->
+    <div class="flex items-center justify-between pb-3 border-b border-slate-100">
+      <div class="flex items-center gap-3">
+        <div class="w-11 h-11 rounded-xl bg-[#E30613] text-white font-black text-xl flex items-center justify-center shadow-sm shrink-0">
+          6
+        </div>
+        <div>
+          <div class="flex items-center gap-2">
+            <h1 class="font-bold text-slate-900 text-base leading-tight">Linea 6 • Cesena</h1>
+            <span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200">
+              <span class="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-ping"></span>
+              LIVE GPS
+            </span>
+          </div>
+          <p class="text-xs text-slate-500 mt-0.5">Rio Maggiore ⇄ Università ⇄ FS ⇄ Bufalini ⇄ Montefiore</p>
+        </div>
+      </div>
+      <span id="roadGeometryStatus" class="text-[10px] font-semibold text-blue-600 bg-blue-50 px-2 py-1 rounded-lg border border-blue-100">
+        Strade OSM
+      </span>
+    </div>
+
+    <!-- 1. Scelta Direzione e Fermata -->
+    <div class="mt-3 space-y-2.5">
+      <!-- Selettore Direzione -->
+      <div class="grid grid-cols-2 gap-1.5 bg-slate-100 p-1 rounded-xl">
+        <button id="btnDir0" type="button" class="py-2 px-2.5 rounded-lg text-xs font-bold transition-all bg-white text-blue-600 shadow-sm flex items-center justify-center gap-1">
+          <span>➔</span> Verso Montefiore
+        </button>
+        <button id="btnDir1" type="button" class="py-2 px-2.5 rounded-lg text-xs font-bold transition-all text-slate-600 hover:text-slate-900 flex items-center justify-center gap-1">
+          <span>➔</span> Verso Rio Maggiore
+        </button>
+      </div>
+
+      <!-- Menu Fermata + Bottone Posizione Campus/GPS -->
+      <div class="flex items-center gap-1.5">
+        <div class="relative flex-1">
+          <select id="stopSelect" aria-label="Fermata di partenza" class="w-full appearance-none bg-slate-50 hover:bg-slate-100 border border-slate-200 text-slate-800 text-xs font-semibold rounded-xl pl-3 pr-8 py-2.5 focus:outline-none focus:ring-2 focus:ring-blue-500 cursor-pointer">
+          </select>
+          <div class="pointer-events-none absolute inset-y-0 right-0 flex items-center px-2.5 text-slate-500">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>
           </div>
         </div>
-      </div>
-      <button id="toggleCollapseBtn" class="collapse-btn mobile-only" aria-label="Espandi/Riduci scheda">
-        <span class="handle-bar"></span>
-      </button>
-    </div>
-
-    <!-- 1. Selettore Direzione e Fermata -->
-    <div class="card-section section-selection">
-      <!-- Tab Direzioni Google Maps -->
-      <div class="dir-tabs" role="tablist">
-        <button type="button" class="dir-tab active" id="dirTab0" data-dir="0" role="tab" aria-selected="true">
-          <span class="dir-tab-arrow">➔</span> Verso Montefiore
+        <button id="btnLocateCampus" type="button" title="Posizionati al Campus Universitario" class="px-2.5 py-2.5 rounded-xl bg-blue-50 hover:bg-blue-100 text-blue-700 border border-blue-200 text-xs font-bold shrink-0 transition" aria-label="Campus Universitario">
+          🎓 Campus
         </button>
-        <button type="button" class="dir-tab" id="dirTab1" data-dir="1" role="tab" aria-selected="false">
-          <span class="dir-tab-arrow">➔</span> Verso Rio Maggiore
+        <button id="btnRealGps" type="button" title="Usa il tuo GPS reale" class="p-2.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-200 text-xs font-bold shrink-0 transition" aria-label="Posizione GPS">
+          📍
         </button>
       </div>
 
-      <!-- Riga Selezione Fermata con bottone GPS -->
-      <div class="stop-picker-row">
-        <div class="select-container">
-          <span class="stop-icon">🚏</span>
-          <select id="stopSelect" class="gmaps-select" aria-label="Seleziona la tua fermata">
-            <option value="">Caricamento fermate...</option>
-          </select>
-        </div>
-        <button id="nearMeBtn" class="near-me-btn" title="Usa la fermata più vicina">
-          <span class="gps-target-icon">📍</span>
-        </button>
-      </div>
-      <div id="gpsStatusNote" class="gps-status-note" style="display: none;"></div>
-    </div>
-
-    <!-- 2. Prossimo Autobus LIVE (In arrivo adesso) -->
-    <div class="card-section section-next-bus" id="nextBusContainer">
-      <div class="loading-shimmer">
-        <div class="shimmer-line eta"></div>
-        <div class="shimmer-line sub"></div>
+      <!-- Info distanza a piedi dal punto blu -->
+      <div id="walkBanner" class="flex items-center justify-between text-[11px] bg-blue-50/80 text-blue-900 px-3 py-1.5 rounded-lg border border-blue-100">
+        <span id="walkText">📍 Dal tuo punto: <strong>45m</strong> (~1 min a piedi)</span>
+        <span class="text-[10px] text-blue-600 font-medium">Trascina il punto blu</span>
       </div>
     </div>
 
-    <!-- 3. Passaggi Successivi (3 righe compatte stile Google Maps) -->
-    <div class="card-section section-subsequent">
-      <div class="subsequent-title">Passaggi successivi</div>
-      <div class="subsequent-list" id="subsequentList">
-        <!-- Generato dinamicamente -->
+    <!-- 2. Box Principale: "Riuscirò a prenderlo?" -->
+    <div id="heroArrivalBox" class="mt-3 p-3.5 rounded-2xl bg-slate-50 border border-slate-200/90">
+      <!-- Popolato in tempo reale da JS -->
+    </div>
+
+    <!-- 3. Passaggi Successivi -->
+    <div class="mt-3 pt-2.5 border-t border-slate-100">
+      <div class="flex items-center justify-between mb-1.5">
+        <span class="text-[11px] font-bold uppercase tracking-wider text-slate-400">Passaggi successivi a questa fermata</span>
+        <span id="liveClock" class="text-[11px] font-semibold text-slate-400"></span>
+      </div>
+      <div id="subsequentBusesList" class="space-y-1.5">
+        <!-- Popolato in tempo reale da JS -->
       </div>
     </div>
   </aside>
 
-  <!-- Controlli Mappa Fluttuanti Stile Google Maps (Floating Action Buttons) -->
-  <div class="gmaps-fab-group">
-    <button id="floatingNearMeBtn" class="gmaps-fab" title="Centra sulla mia posizione" aria-label="La mia posizione">
-      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#5F6368" stroke-width="2">
-        <circle cx="12" cy="12" r="7"/>
-        <line x1="12" y1="1" x2="12" y2="5"/>
-        <line x1="12" y1="19" x2="12" y2="23"/>
-        <line x1="1" y1="12" x2="5" y2="12"/>
-        <line x1="19" y1="12" x2="23" y2="12"/>
+  <!-- Pulsanti Rapidi in Basso a Destra (Stile Google Maps) -->
+  <div class="fixed bottom-6 right-4 z-[900] flex flex-col gap-2">
+    <button id="fabCenterUser" type="button" title="Vai alla tua posizione" class="w-11 h-11 rounded-full bg-white shadow-lg border border-slate-200 flex items-center justify-center text-slate-700 hover:bg-slate-50 active:scale-95 transition">
+      <svg class="w-5 h-5 text-blue-600" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+        <circle cx="12" cy="12" r="7"/><line x1="12" y1="2" x2="12" y2="5"/><line x1="12" y1="19" x2="12" y2="22"/><line x1="2" y1="12" x2="5" y2="12"/><line x1="19" y1="12" x2="22" y2="12"/>
       </svg>
     </button>
-    <button id="fitRouteBtn" class="gmaps-fab" title="Inquadra tutto il percorso" aria-label="Inquadra percorso">
-      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#5F6368" stroke-width="2">
-        <path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7"/>
+    <button id="fabFitRoute" type="button" title="Inquadra intera Linea 6" class="w-11 h-11 rounded-full bg-white shadow-lg border border-slate-200 flex items-center justify-center text-slate-700 hover:bg-slate-50 active:scale-95 transition">
+      <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+        <path stroke-linecap="round" stroke-linejoin="round" d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7"/>
       </svg>
     </button>
   </div>
 
-  <!-- Leaflet JS -->
-  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" 
-          integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
-  
-  <!-- App JS (con cache-busting per forzare aggiornamento immediato) -->
-  <script src="/app.js?v=fix3"></script>
+  <!-- Leaflet 1.9.4 JS -->
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
 
-  <!-- Rimozione forzata vecchie cache e disattivazione Service Worker -->
   <script>
-    if ('serviceWorker' in navigator) {
-      navigator.serviceWorker.getRegistrations().then(regs => {
-        regs.forEach(r => r.unregister());
+    (() => {
+      'use strict';
+
+      /* ========================================================================
+         1. FERMATE UFFICIALI LINEA 6 CESENA (Incluso Campus Universitario OSM)
+         ======================================================================== */
+      const STOPS_DIR_0 = [
+        { stop_id: 'CE_6001', stop_code: '6001', stop_name: 'Rio Maggiore (Capolinea)', lat: 44.15240, lon: 12.22250 },
+        { stop_id: 'CE_6003', stop_code: '6003', stop_name: 'Torre del Moro', lat: 44.14635, lon: 12.22695 },
+        { stop_id: 'CE_6005', stop_code: '6005', stop_name: 'Ippodromo Gramsci', lat: 44.14368, lon: 12.23085 },
+        { stop_id: 'CE_6006', stop_code: '6006', stop_name: 'Ex Zuccherificio (Via Calvino)', lat: 44.14352, lon: 12.23678 },
+        { stop_id: 'CE_6007', stop_code: '6007', stop_name: 'Quasimodo (Via S. Quasimodo)', lat: 44.14612, lon: 12.23602 },
+        { stop_id: 'CE_6008', stop_code: '6008', stop_name: 'Università (Campus Cesena)', lat: 44.14752, lon: 12.23532 },
+        { stop_id: 'CE_6009', stop_code: '6009', stop_name: 'Saba (Via Umberto Saba)', lat: 44.14458, lon: 12.23818 },
+        { stop_id: 'CE_6010', stop_code: '6010', stop_name: 'Europa (Architettura / Poste)', lat: 44.14502, lon: 12.24275 },
+        { stop_id: 'CE_6011', stop_code: '6011', stop_name: 'Cesena Stazione FS', lat: 44.14660, lon: 12.24755 },
+        { stop_id: 'CE_6014', stop_code: '6014', stop_name: 'Barriera Cavour', lat: 44.13915, lon: 12.24345 },
+        { stop_id: 'CE_6017', stop_code: '6017', stop_name: 'Viale Mazzoni', lat: 44.13720, lon: 12.24200 },
+        { stop_id: 'CE_6019', stop_code: '6019', stop_name: 'Ponte Nuovo / Viale Roma', lat: 44.13480, lon: 12.24650 },
+        { stop_id: 'CE_6021', stop_code: '6021', stop_name: 'Ghirotti Ospedale Bufalini', lat: 44.13280, lon: 12.25360 },
+        { stop_id: 'CE_6023', stop_code: '6023', stop_name: 'Piazzale Olimpia (Stadio)', lat: 44.13400, lon: 12.25880 },
+        { stop_id: 'CE_6025', stop_code: '6025', stop_name: 'Montefiore (Capolinea)', lat: 44.13050, lon: 12.26420 }
+      ];
+
+      // Fermate Direzione 1 (Verso Rio Maggiore)
+      const STOPS_DIR_1 = [...STOPS_DIR_0].reverse().map((s, idx) => ({
+        ...s,
+        stop_id: s.stop_id.replace('CE_60', 'CE_61'),
+        sequence: idx + 1
+      }));
+
+      // Waypoint stradali fedeli alle vie di Cesena (incluso anello Campus Universitario)
+      const ROAD_CORRIDOR_DIR_0 = [
+        [44.15240, 12.22250], // Rio Maggiore Capolinea
+        [44.15160, 12.22380], // Via Rio Maggiore
+        [44.15020, 12.22550], // Innesto Via Dismano
+        [44.14840, 12.22650], // Via Dismano Sud
+        [44.14635, 12.22695], // Fermata Torre del Moro
+        [44.14560, 12.22870], // Inizio Viale Gramsci
+        [44.14368, 12.23085], // Fermata Ippodromo Gramsci
+        [44.14315, 12.23485], // Ponte Fiume Savio / Via Calvino
+        [44.14352, 12.23678], // Fermata Ex Zuccherificio (Via Calvino)
+        [44.14390, 12.23745], // Svolta su Via Salvatore Quasimodo
+        [44.14612, 12.23602], // Fermata Quasimodo
+        [44.14740, 12.23495], // Svolta Campus Universitario
+        [44.14752, 12.23532], // Fermata Università (Campus Cesena)
+        [44.14765, 12.23635], // Angolo Via Bacchelli
+        [44.14630, 12.23715], // Discesa Via Umberto Saba
+        [44.14458, 12.23818], // Fermata Saba (Via Umberto Saba)
+        [44.14395, 12.23865], // Svolta Via Werther Ricchi
+        [44.14460, 12.24085], // Rotonda Via Cavalcavia / Viale Europa
+        [44.14502, 12.24275], // Fermata Europa (Architettura / Poste)
+        [44.14545, 12.24495], // Viale Europa Est
+        [44.14640, 12.24620], // Sottopasso / Piazzale Sanguinetti
+        [44.14660, 12.24755], // Fermata Cesena Stazione FS
+        [44.14535, 12.24645], // Piazzale Karl Marx
+        [44.14320, 12.24430], // Viale Carducci Nord
+        [44.14120, 12.24352], // Viale Carducci Sud
+        [44.13915, 12.24345], // Fermata Barriera Cavour
+        [44.13815, 12.24275], // Viale Mazzoni Nord
+        [44.13720, 12.24200], // Fermata Viale Mazzoni
+        [44.13610, 12.24340], // Via Padre Vicinio da Sarsina
+        [44.13510, 12.24520], // Innesto Ponte Nuovo
+        [44.13480, 12.24650], // Fermata Ponte Nuovo / Viale Roma
+        [44.13420, 12.24870], // Viale Roma
+        [44.13360, 12.25120], // Salita Viale Ghirotti
+        [44.13280, 12.25360], // Fermata Ghirotti Ospedale Bufalini
+        [44.13330, 12.25580], // Via Veneto
+        [44.13400, 12.25880], // Fermata Piazzale Olimpia (Stadio)
+        [44.13310, 12.26020], // Rotonda Stadio
+        [44.13180, 12.26230], // Via Leopoldo Lucchi
+        [44.13050, 12.26420]  // Fermata Montefiore (Capolinea)
+      ];
+
+      /* ========================================================================
+         2. FUNZIONI GEOMETRICHE E ROUTING STRADALE REALE (OSRM + DENSIFICAZIONE)
+         ======================================================================== */
+      function haversineMeters(lat1, lon1, lat2, lon2) {
+        const R = 6371000;
+        const toRad = d => (d * Math.PI) / 180;
+        const dLat = toRad(lat2 - lat1);
+        const dLon = toRad(lon2 - lon1);
+        const a = Math.sin(dLat / 2) ** 2 +
+                  Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon / 2) ** 2;
+        return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+      }
+
+      function computeBearing(lat1, lon1, lat2, lon2) {
+        const toRad = d => (d * Math.PI) / 180;
+        const toDeg = r => (r * 180) / Math.PI;
+        const dLon = toRad(lon2 - lon1);
+        const y = Math.sin(dLon) * Math.cos(toRad(lat2));
+        const x = Math.cos(toRad(lat1)) * Math.sin(toRad(lat2)) -
+                  Math.sin(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.cos(dLon);
+        return (toDeg(Math.atan2(y, x)) + 360) % 360;
+      }
+
+      // Densifica una polilinea in punti distanti al massimo ~18 metri per movimento fluido
+      function densifyPolyline(coords, stepMeters = 18) {
+        const out = [];
+        for (let i = 0; i < coords.length - 1; i++) {
+          const p1 = coords[i];
+          const p2 = coords[i + 1];
+          const dist = haversineMeters(p1[0], p1[1], p2[0], p2[1]);
+          const steps = Math.max(1, Math.ceil(dist / stepMeters));
+          for (let s = 0; s < steps; s++) {
+            const t = s / steps;
+            out.push([
+              +(p1[0] + (p2[0] - p1[0]) * t).toFixed(6),
+              +(p1[1] + (p2[1] - p1[1]) * t).toFixed(6)
+            ]);
+          }
+        }
+        out.push(coords[coords.length - 1]);
+        return out;
+      }
+
+      // Aggancia ogni fermata esattamente al vertice più vicino della polilinea stradale
+      function snapStopsToPolyline(stops, polyline) {
+        let searchStart = 0;
+        stops.forEach((stop, idx) => {
+          let bestIdx = searchStart;
+          let bestDist = Infinity;
+          for (let i = searchStart; i < polyline.length; i++) {
+            const d = haversineMeters(stop.lat, stop.lon, polyline[i][0], polyline[i][1]);
+            if (d < bestDist) {
+              bestDist = d;
+              bestIdx = i;
+            }
+          }
+          searchStart = Math.max(searchStart, bestIdx);
+          stop.lat = polyline[bestIdx][0];
+          stop.lon = polyline[bestIdx][1];
+          stop.shape_index = bestIdx;
+          stop.sequence = idx + 1;
+        });
+        // Garantisce che i capolinea coincidano con inizio e fine
+        stops[0].shape_index = 0;
+        stops[0].lat = polyline[0][0];
+        stops[0].lon = polyline[0][1];
+        const last = stops[stops.length - 1];
+        last.shape_index = polyline.length - 1;
+        last.lat = polyline[polyline.length - 1][0];
+        last.lon = polyline[polyline.length - 1][1];
+      }
+
+      /* ========================================================================
+         3. STATO DELL'APPLICAZIONE
+         ======================================================================== */
+      const CAMPUS_COORDS = { lat: 44.14710, lon: 12.23550, label: 'Campus Universitario' };
+
+      const state = {
+        map: null,
+        direction: 0, // 0 = Verso Montefiore, 1 = Verso Rio Maggiore
+        selectedStopId: 'CE_6008', // Default: Università (Campus Cesena)
+        userPos: { ...CAMPUS_COORDS },
+        walkingMeters: 45,
+        walkingMinutes: 1,
+        followedBusId: null,
+        routes: {
+          0: { stops: STOPS_DIR_0, polyline: densifyPolyline(ROAD_CORRIDOR_DIR_0, 18) },
+          1: { stops: STOPS_DIR_1, polyline: densifyPolyline([...ROAD_CORRIDOR_DIR_0].reverse(), 18) }
+        },
+        layers: {
+          baseRoute: null,
+          activeApproach: null,
+          walkLine: null,
+          stopsGroup: null,
+          userMarker: null,
+          selectedStopPin: null,
+          busMarkers: new Map()
+        }
+      };
+
+      // Snap iniziale immediato delle fermate
+      snapStopsToPolyline(state.routes[0].stops, state.routes[0].polyline);
+      snapStopsToPolyline(state.routes[1].stops, state.routes[1].polyline);
+
+      /* ========================================================================
+         4. INIZIALIZZAZIONE MAPPA E RAFFINAMENTO STRADALE OSRM LIVE
+         ======================================================================== */
+      function initMap() {
+        state.map = L.map('map', {
+          center: [44.1462, 12.2375],
+          zoom: 15,
+          zoomControl: false
+        });
+
+        L.control.zoom({ position: 'topright' }).addTo(state.map);
+
+        L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+          maxZoom: 19,
+          className: 'gmaps-tiles',
+          attribution: '&copy; OpenStreetMap'
+        }).addTo(state.map);
+
+        state.layers.baseRoute = L.layerGroup().addTo(state.map);
+        state.layers.activeApproach = L.layerGroup().addTo(state.map);
+        state.layers.walkLine = L.layerGroup().addTo(state.map);
+        state.layers.stopsGroup = L.layerGroup().addTo(state.map);
+
+        // Click in qualsiasi punto della mappa per spostare l'utente
+        state.map.on('click', (e) => {
+          setUserPosition(e.latlng.lat, e.latlng.lng, 'Punto scelto sulla mappa', true);
+        });
+
+        setTimeout(() => state.map.invalidateSize(), 150);
+      }
+
+      // Richiede a OSRM la geometria precisa dell'asfalto di Cesena passando per tutti i nodi
+      async function fetchOsrmExactRoadGeometry() {
+        const badge = document.getElementById('roadGeometryStatus');
+        try {
+          const coordStr = ROAD_CORRIDOR_DIR_0.map(p => `${p[1]},${p[0]}`).join(';');
+          const url = `https://router.project-osrm.org/route/v1/driving/${coordStr}?overview=full&geometries=geojson&continue_straight=false`;
+          const res = await fetch(url);
+          if (!res.ok) return;
+          const data = await res.json();
+          if (data.code === 'Ok' && data.routes?.[0]?.geometry?.coordinates?.length > 80) {
+            const osrmCoords0 = data.routes[0].geometry.coordinates.map(([lon, lat]) => [lat, lon]);
+            const dense0 = densifyPolyline(osrmCoords0, 15);
+            const dense1 = [...dense0].reverse();
+
+            state.routes[0].polyline = dense0;
+            state.routes[1].polyline = dense1;
+
+            snapStopsToPolyline(state.routes[0].stops, state.routes[0].polyline);
+            snapStopsToPolyline(state.routes[1].stops, state.routes[1].polyline);
+
+            renderDirectionRoute();
+            updateUserAndStopRelation(false);
+            if (badge) {
+              badge.textContent = `Asfalto Reale (${dense0.length} pt)`;
+              badge.className = 'text-[10px] font-semibold text-emerald-700 bg-emerald-50 px-2 py-1 rounded-lg border border-emerald-200';
+            }
+          }
+        } catch (err) {
+          // Mantiene il corridoio stradale densificato precaricato
+        }
+      }
+
+      /* ========================================================================
+         5. DISEGNO PERCORSO, FERMATE E PUNTO BLU UTENTE TRASCINABILE
+         ======================================================================== */
+      function renderDirectionRoute() {
+        state.layers.baseRoute.clearLayers();
+        state.layers.stopsGroup.clearLayers();
+
+        const routeObj = state.routes[state.direction];
+        const poly = routeObj.polyline;
+
+        // Bordo bianco di contrasto stile Google Maps
+        L.polyline(poly, {
+          color: '#FFFFFF',
+          weight: 9,
+          opacity: 0.95,
+          lineCap: 'round',
+          lineJoin: 'round'
+        }).addTo(state.layers.baseRoute);
+
+        // Linea base celeste Google Maps Transit
+        L.polyline(poly, {
+          color: '#93C5FD',
+          weight: 5.5,
+          opacity: 1,
+          lineCap: 'round',
+          lineJoin: 'round'
+        }).addTo(state.layers.baseRoute);
+
+        // Fermate incollate sulla strada
+        routeObj.stops.forEach((stop, idx) => {
+          const isTerminus = idx === 0 || idx === routeObj.stops.length - 1;
+          const isCampus = stop.stop_name.toLowerCase().includes('universit') || stop.stop_name.toLowerCase().includes('quasimodo');
+
+          const marker = L.circleMarker([stop.lat, stop.lon], {
+            radius: isTerminus ? 6.5 : (isCampus ? 6 : 5),
+            fillColor: isTerminus ? '#1A73E8' : '#FFFFFF',
+            color: isCampus ? '#E30613' : '#1A73E8',
+            weight: 2.5,
+            fillOpacity: 1
+          });
+
+          marker.bindTooltip(`${stop.stop_name} (#${stop.stop_code})`, {
+            direction: 'top',
+            offset: [0, -6],
+            className: 'clean-stop-tooltip'
+          });
+
+          marker.on('click', (ev) => {
+            L.DomEvent.stopPropagation(ev);
+            selectStopById(stop.stop_id, true);
+          });
+
+          marker.addTo(state.layers.stopsGroup);
+        });
+      }
+
+      function renderUserMarker() {
+        if (!state.layers.userMarker) {
+          const icon = L.divIcon({
+            className: '',
+            iconSize: [22, 22],
+            iconAnchor: [11, 11],
+            html: `
+              <div class="user-blue-dot-wrapper" title="La tua posizione (trascinami)">
+                <div class="user-blue-halo"></div>
+                <div class="user-blue-core"></div>
+              </div>
+            `
+          });
+
+          state.layers.userMarker = L.marker([state.userPos.lat, state.userPos.lon], {
+            icon,
+            draggable: true,
+            zIndexOffset: 2000
+          }).addTo(state.map);
+
+          state.layers.userMarker.on('dragend', (e) => {
+            const pos = e.target.getLatLng();
+            setUserPosition(pos.lat, pos.lng, 'Posizione personalizzata', true);
+          });
+        } else {
+          state.layers.userMarker.setLatLng([state.userPos.lat, state.userPos.lon]);
+        }
+      }
+
+      function setUserPosition(lat, lon, label, autoSelectNearestStop = true) {
+        state.userPos = { lat, lon, label };
+        renderUserMarker();
+
+        const stops = state.routes[state.direction].stops;
+        if (autoSelectNearestStop) {
+          let nearest = stops[0];
+          let minD = Infinity;
+          stops.forEach(s => {
+            const d = haversineMeters(lat, lon, s.lat, s.lon);
+            if (d < minD) {
+              minD = d;
+              nearest = s;
+            }
+          });
+          state.selectedStopId = nearest.stop_id;
+          const selectEl = document.getElementById('stopSelect');
+          if (selectEl) selectEl.value = nearest.stop_id;
+        }
+
+        updateUserAndStopRelation(false);
+      }
+
+      function selectStopById(stopId, panToStop = false) {
+        state.selectedStopId = stopId;
+        const selectEl = document.getElementById('stopSelect');
+        if (selectEl) selectEl.value = stopId;
+        updateUserAndStopRelation(panToStop);
+      }
+
+      function updateUserAndStopRelation(panToStop = false) {
+        const stops = state.routes[state.direction].stops;
+        const stop = stops.find(s => s.stop_id === state.selectedStopId) || stops[0];
+        if (!stop) return;
+
+        // Distanza a piedi (fattore tortuosità pedonale 1.18x, velocità 80 m/min)
+        const straightDist = haversineMeters(state.userPos.lat, state.userPos.lon, stop.lat, stop.lon);
+        state.walkingMeters = Math.round(straightDist * 1.15);
+        state.walkingMinutes = state.walkingMeters < 60 ? 1 : Math.round(state.walkingMeters / 80);
+
+        const walkText = document.getElementById('walkText');
+        if (walkText) {
+          walkText.innerHTML = `📍 <strong>${state.userPos.label}</strong>: a <strong>${state.walkingMeters}m</strong> da ${stop.stop_name} (~${state.walkingMinutes} min a piedi)`;
+        }
+
+        // Disegna linea tratteggiata pedonale tra punto blu utente e fermata scelta
+        state.layers.walkLine.clearLayers();
+        L.polyline([[state.userPos.lat, state.userPos.lon], [stop.lat, stop.lon]], {
+          color: '#1A73E8',
+          weight: 3,
+          dashArray: '4, 7',
+          opacity: 0.85
+        }).addTo(state.layers.walkLine);
+
+        // Pin evidenziato sulla fermata selezionata
+        if (state.layers.selectedStopPin) {
+          state.map.removeLayer(state.layers.selectedStopPin);
+        }
+        const pinIcon = L.divIcon({
+          className: '',
+          iconSize: [200, 44],
+          iconAnchor: [100, 38],
+          html: `
+            <div class="selected-stop-wrapper">
+              <div class="selected-stop-label">🚏 ${stop.stop_name}</div>
+              <div class="selected-stop-dot"></div>
+            </div>
+          `
+        });
+        state.layers.selectedStopPin = L.marker([stop.lat, stop.lon], {
+          icon: pinIcon,
+          zIndexOffset: 1500
+        }).addTo(state.map);
+
+        if (panToStop && state.map) {
+          state.map.panTo([stop.lat, stop.lon], { animate: true });
+        }
+      }
+
+      /* ========================================================================
+         6. SIMULATORE DETERMINISTICO 60 FPS LUNGO LA STRADA REALE
+         ======================================================================== */
+      // Calcola lo stato istantaneo dei 3 autobus sulla linea selezionata
+      function computeLiveBusesForDirection(dirId, nowMs) {
+        const routeObj = state.routes[dirId];
+        const poly = routeObj.polyline;
+        const stops = routeObj.stops;
+        const totalVertices = poly.length;
+
+        // Durata intera corsa da capolinea a capolinea: 24 minuti (1440 secondi)
+        const tripDurationSec = 1440;
+        const nowSec = nowMs / 1000;
+
+        // 3 vetture distanziate lungo la linea
+        const offsetsSec = [0, 480, 960];
+        const buses = [];
+
+        offsetsSec.forEach((offset, idx) => {
+          const cyclePos = ((nowSec + offset) % tripDurationSec) / tripDurationSec; // [0..1)
+          const exactVertex = cyclePos * (totalVertices - 1);
+          const vIdx = Math.min(Math.floor(exactVertex), totalVertices - 2);
+          const frac = exactVertex - vIdx;
+
+          const pA = poly[vIdx];
+          const pB = poly[vIdx + 1];
+          const lat = pA[0] + (pB[0] - pA[0]) * frac;
+          const lon = pA[1] + (pB[1] - pA[1]) * frac;
+          const bearing = computeBearing(pA[0], pA[1], pB[0], pB[1]);
+
+          // Individua fermata precedente e successiva
+          let currentStopIdx = 0;
+          for (let s = 0; s < stops.length - 1; s++) {
+            if (vIdx >= stops[s].shape_index) {
+              currentStopIdx = s;
+            }
+          }
+          const nextStopIdx = Math.min(currentStopIdx + 1, stops.length - 1);
+          const currentStop = stops[currentStopIdx];
+          const nextStop = stops[nextStopIdx];
+
+          const distToStopM = haversineMeters(lat, lon, currentStop.lat, currentStop.lon);
+          const isAtStop = distToStopM < 24;
+
+          buses.push({
+            id: `CE-60${idx + 1}-D${dirId}`,
+            label: `Start Romagna ${601 + idx + dirId * 10}`,
+            direction: dirId,
+            destination: dirId === 0 ? 'Montefiore' : 'Rio Maggiore',
+            lat,
+            lon,
+            bearing,
+            vertexIndex: vIdx,
+            status: isAtStop ? 'STOPPED_AT' : 'IN_TRANSIT_TO',
+            currentStopIndex: currentStopIdx,
+            nextStopIndex: nextStopIdx,
+            currentStop,
+            nextStop,
+            remainingRatioToEnd: 1 - cyclePos
+          });
+        });
+
+        return buses;
+      }
+
+      // Calcola i prossimi 4 arrivi per la fermata selezionata dall'utente
+      function computeArrivalsForSelectedStop(liveBuses, nowMs) {
+        const routeObj = state.routes[state.direction];
+        const stops = routeObj.stops;
+        const poly = routeObj.polyline;
+        const totalVertices = poly.length;
+        const tripDurationSec = 1440; // 24 min
+
+        const userStopIdx = stops.findIndex(s => s.stop_id === state.selectedStopId);
+        const targetStop = stops[userStopIdx >= 0 ? userStopIdx : 0];
+        const targetVertex = targetStop.shape_index;
+
+        const arrivals = [];
+
+        // 1. Autobus LIVE che non hanno ancora superato la fermata dell'utente
+        liveBuses.forEach(bus => {
+          if (bus.vertexIndex <= targetVertex) {
+            const verticesAway = targetVertex - bus.vertexIndex;
+            const etaSeconds = Math.round((verticesAway / totalVertices) * tripDurationSec);
+            const etaMinutes = Math.max(0, Math.round(etaSeconds / 60));
+            const stopsAway = Math.max(0, (userStopIdx >= 0 ? userStopIdx : 0) - bus.currentStopIndex);
+
+            arrivals.push({
+              busId: bus.id,
+              vehicleLabel: bus.label,
+              destination: bus.destination,
+              isLive: true,
+              etaSeconds,
+              etaMinutes,
+              stopsAway,
+              bus
+            });
+          }
+        });
+
+        arrivals.sort((a, b) => a.etaSeconds - b.etaSeconds);
+
+        // 2. Completa fino a 4 passaggi con le corse successive (frequenza 12 min)
+        let lastEtaMin = arrivals.length > 0 ? arrivals[arrivals.length - 1].etaMinutes : 3;
+        while (arrivals.length < 4) {
+          lastEtaMin += 12;
+          arrivals.push({
+            busId: null,
+            vehicleLabel: 'Corsa Start Romagna',
+            destination: state.direction === 0 ? 'Montefiore' : 'Rio Maggiore',
+            isLive: false,
+            etaSeconds: lastEtaMin * 60,
+            etaMinutes: lastEtaMin,
+            stopsAway: Math.max(2, userStopIdx)
+          });
+        }
+
+        // Aggiunge orario previsto HH:MM e semaforo "Riuscirò a prenderlo?"
+        arrivals.forEach(arr => {
+          const arrivalDate = new Date(nowMs + arr.etaSeconds * 1000);
+          arr.clockTime = arrivalDate.toLocaleTimeString('it-IT', { hour: '2-digit', minute: '2-digit' });
+
+          const margin = arr.etaMinutes - state.walkingMinutes;
+          if (margin >= 2) {
+            arr.catchState = {
+              code: 'EASY',
+              bg: 'bg-emerald-50 border-emerald-200 text-emerald-800',
+              badge: `🟢 Sì, fai in tempo a piedi (+${margin} min di margine)`
+            };
+          } else if (margin >= 0) {
+            arr.catchState = {
+              code: 'HURRY',
+              bg: 'bg-amber-50 border-amber-200 text-amber-800',
+              badge: `🟡 Esci subito! Hai solo ${margin} min di margine`
+            };
+          } else {
+            arr.catchState = {
+              code: 'MISSED',
+              bg: 'bg-rose-50 border-rose-200 text-rose-800',
+              badge: `🔴 Troppo vicino (${arr.etaMinutes} min vs ${state.walkingMinutes} min a piedi) • Punta al successivo`
+            };
+          }
+        });
+
+        return { targetStop, arrivals };
+      }
+
+      /* ========================================================================
+         7. RENDERING MARKER AUTOBUS E TRATTO BLU DI AVVICINAMENTO
+         ======================================================================== */
+      function updateMapBusesAndHighlight(liveBuses, arrivalsInfo) {
+        const primaryBusId = arrivalsInfo.arrivals[0]?.busId || null;
+        const activeIds = new Set(liveBuses.map(b => b.id));
+
+        // Rimuovi marker di direzioni non attive
+        for (const [id, marker] of state.layers.busMarkers.entries()) {
+          if (!activeIds.has(id)) {
+            state.map.removeLayer(marker);
+            state.layers.busMarkers.delete(id);
+          }
+        }
+
+        liveBuses.forEach(bus => {
+          const isPrimary = bus.id === primaryBusId;
+          const matchingArrival = arrivalsInfo.arrivals.find(a => a.busId === bus.id);
+          const pillText = matchingArrival
+            ? (matchingArrival.etaMinutes <= 0 ? 'Bus 6 • In arrivo' : `Bus 6 • a ${matchingArrival.etaMinutes} min da te`)
+            : `Bus 6 ➔ ${bus.nextStop.stop_name.split(' ')[0]}`;
+
+          let marker = state.layers.busMarkers.get(bus.id);
+          if (!marker) {
+            const icon = L.divIcon({
+              className: '',
+              iconSize: [46, 46],
+              iconAnchor: [23, 23],
+              html: `
+                <div class="bus-live-wrapper">
+                  <div class="bus-radar-wave"></div>
+                  <div class="bus-compass-ring" style="transform: rotate(${bus.bearing.toFixed(1)}deg)">
+                    <div class="bus-heading-arrow"></div>
+                  </div>
+                  <div class="bus-circle-body ${isPrimary ? 'is-primary' : ''}">6</div>
+                  <div class="bus-pill-tag">${pillText}</div>
+                </div>
+              `
+            });
+
+            marker = L.marker([bus.lat, bus.lon], {
+              icon,
+              zIndexOffset: isPrimary ? 1800 : 1200
+            }).addTo(state.map);
+
+            marker.on('click', () => {
+              state.followedBusId = bus.id;
+              state.map.flyTo([bus.lat, bus.lon], 16, { duration: 0.6 });
+            });
+
+            state.layers.busMarkers.set(bus.id, marker);
+          } else {
+            marker.setLatLng([bus.lat, bus.lon]);
+            const el = marker.getElement();
+            if (el) {
+              const ring = el.querySelector('.bus-compass-ring');
+              if (ring) ring.style.transform = `rotate(${bus.bearing.toFixed(1)}deg)`;
+              const body = el.querySelector('.bus-circle-body');
+              if (body) body.className = `bus-circle-body ${isPrimary ? 'is-primary' : ''}`;
+              const tag = el.querySelector('.bus-pill-tag');
+              if (tag && tag.textContent !== pillText) tag.textContent = pillText;
+            }
+          }
+
+          if (state.followedBusId === bus.id) {
+            state.map.panTo([bus.lat, bus.lon], { animate: false });
+          }
+        });
+
+        // Evidenzia in Blu Google Maps acceso (#1A73E8) il tratto stradale tra il prossimo bus e la fermata dell'utente
+        state.layers.activeApproach.clearLayers();
+        const firstArrival = arrivalsInfo.arrivals[0];
+        if (firstArrival?.isLive && firstArrival.bus) {
+          const poly = state.routes[state.direction].polyline;
+          const startV = firstArrival.bus.vertexIndex;
+          const endV = arrivalsInfo.targetStop.shape_index;
+          if (startV <= endV) {
+            const subPoly = [[firstArrival.bus.lat, firstArrival.bus.lon], ...poly.slice(startV + 1, endV + 1)];
+            if (subPoly.length > 1) {
+              L.polyline(subPoly, {
+                color: '#1A73E8',
+                weight: 7,
+                opacity: 0.98,
+                lineCap: 'round',
+                lineJoin: 'round'
+              }).addTo(state.layers.activeApproach);
+            }
+          }
+        }
+      }
+
+      /* ========================================================================
+         8. AGGIORNAMENTO CARD INTERFACCIA UTENTE (OGNI SECONDO)
+         ======================================================================== */
+      let lastUiRenderSec = -1;
+
+      function updatePassengerCardUI(arrivalsInfo, nowMs) {
+        const nowSec = Math.floor(nowMs / 1000);
+        if (nowSec === lastUiRenderSec) return;
+        lastUiRenderSec = nowSec;
+
+        const clockEl = document.getElementById('liveClock');
+        if (clockEl) {
+          clockEl.textContent = new Date(nowMs).toLocaleTimeString('it-IT', {
+            hour: '2-digit',
+            minute: '2-digit',
+            second: '2-digit'
+          });
+        }
+
+        const first = arrivalsInfo.arrivals[0];
+        const heroBox = document.getElementById('heroArrivalBox');
+        if (heroBox && first) {
+          const etaLabel = first.etaMinutes <= 0 ? 'In arrivo ora' : `tra ${first.etaMinutes} min`;
+          const subStatus = first.isLive
+            ? `<span class="text-emerald-600 font-bold">((•)) IN TEMPO REALE</span> • a <strong>${first.stopsAway} fermate</strong> da te (ora a <em>${first.bus.currentStop.stop_name}</em>)`
+            : `📅 Corsa programmata • a ${first.stopsAway} fermate da te`;
+
+          heroBox.innerHTML = `
+            <div class="flex items-baseline justify-between">
+              <div class="text-3xl font-black text-slate-900 tracking-tight">${etaLabel}</div>
+              <div class="text-xs font-bold text-slate-500 bg-white px-2.5 py-1 rounded-lg border border-slate-200">
+                ore ${first.clockTime}
+              </div>
+            </div>
+            <div class="text-xs text-slate-600 mt-1.5 leading-snug">
+              ${subStatus}
+            </div>
+            <div class="mt-2.5 px-3 py-2 rounded-xl border text-xs font-bold ${first.catchState.bg}">
+              ${first.catchState.badge}
+            </div>
+            <button id="btnFocusPrimaryBus" type="button" class="mt-2.5 w-full py-2 px-3 rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-xs font-bold flex items-center justify-center gap-1.5 transition shadow-sm">
+              <span>🚌</span> Mostra questo autobus sulla mappa
+            </button>
+          `;
+
+          const btnFocus = document.getElementById('btnFocusPrimaryBus');
+          if (btnFocus) {
+            btnFocus.onclick = () => {
+              if (first.bus) {
+                state.followedBusId = first.bus.id;
+                state.map.flyTo([first.bus.lat, first.bus.lon], 16, { duration: 0.7 });
+              } else {
+                state.map.flyTo([arrivalsInfo.targetStop.lat, arrivalsInfo.targetStop.lon], 16, { duration: 0.7 });
+              }
+            };
+          }
+        }
+
+        // Lista 3 passaggi successivi
+        const subList = document.getElementById('subsequentBusesList');
+        if (subList) {
+          const nextThree = arrivalsInfo.arrivals.slice(1, 4);
+          subList.innerHTML = nextThree.map(item => `
+            <div data-bus-id="${item.busId || ''}" class="sub-bus-row flex items-center justify-between px-3 py-2 rounded-xl bg-slate-50 hover:bg-slate-100 border border-slate-200/70 cursor-pointer transition">
+              <div class="flex items-center gap-2">
+                <span class="w-5 h-5 rounded-md bg-blue-600 text-white text-[11px] font-extrabold flex items-center justify-center">6</span>
+                <div>
+                  <div class="text-xs font-bold text-slate-800">➔ ${item.destination}</div>
+                  <div class="text-[10px] text-slate-500">
+                    ${item.isLive ? '🟢 GPS Live in viaggio' : '🕒 Corsa programmata'} • ${item.catchState.code === 'EASY' ? 'Fai in tempo comodamente' : 'In orario'}
+                  </div>
+                </div>
+              </div>
+              <div class="text-right">
+                <div class="text-xs font-extrabold text-slate-900">tra ${item.etaMinutes} min</div>
+                <div class="text-[10px] font-semibold text-slate-400">ore ${item.clockTime}</div>
+              </div>
+            </div>
+          `).join('');
+
+          subList.querySelectorAll('.sub-bus-row').forEach(row => {
+            row.onclick = () => {
+              const bId = row.getAttribute('data-bus-id');
+              const marker = bId ? state.layers.busMarkers.get(bId) : null;
+              if (marker) {
+                state.followedBusId = bId;
+                state.map.flyTo(marker.getLatLng(), 16, { duration: 0.7 });
+              }
+            };
+          });
+        }
+      }
+
+      /* ========================================================================
+         9. CONTROLLI UI E POPOLAMENTO MENU FERMATE
+         ======================================================================== */
+      function populateStopDropdown() {
+        const selectEl = document.getElementById('stopSelect');
+        if (!selectEl) return;
+        const stops = state.routes[state.direction].stops;
+        selectEl.innerHTML = stops.map(s =>
+          `<option value="${s.stop_id}">${s.stop_name} (#${s.stop_code})</option>`
+        ).join('');
+        selectEl.value = state.selectedStopId;
+      }
+
+      function switchDirection(newDir) {
+        if (state.direction === newDir) return;
+        state.direction = newDir;
+        state.followedBusId = null;
+
+        const btn0 = document.getElementById('btnDir0');
+        const btn1 = document.getElementById('btnDir1');
+        if (newDir === 0) {
+          btn0.className = 'py-2 px-2.5 rounded-lg text-xs font-bold transition-all bg-white text-blue-600 shadow-sm flex items-center justify-center gap-1';
+          btn1.className = 'py-2 px-2.5 rounded-lg text-xs font-bold transition-all text-slate-600 hover:text-slate-900 flex items-center justify-center gap-1';
+        } else {
+          btn1.className = 'py-2 px-2.5 rounded-lg text-xs font-bold transition-all bg-white text-blue-600 shadow-sm flex items-center justify-center gap-1';
+          btn0.className = 'py-2 px-2.5 rounded-lg text-xs font-bold transition-all text-slate-600 hover:text-slate-900 flex items-center justify-center gap-1';
+        }
+
+        renderDirectionRoute();
+        setUserPosition(state.userPos.lat, state.userPos.lon, state.userPos.label, true);
+        populateStopDropdown();
+        lastUiRenderSec = -1;
+      }
+
+      function bindEvents() {
+        document.getElementById('btnDir0')?.addEventListener('click', () => switchDirection(0));
+        document.getElementById('btnDir1')?.addEventListener('click', () => switchDirection(1));
+
+        document.getElementById('stopSelect')?.addEventListener('change', (e) => {
+          state.followedBusId = null;
+          selectStopById(e.target.value, true);
+          lastUiRenderSec = -1;
+        });
+
+        // Bottone rapido Campus Universitario
+        document.getElementById('btnLocateCampus')?.addEventListener('click', () => {
+          state.followedBusId = null;
+          setUserPosition(CAMPUS_COORDS.lat, CAMPUS_COORDS.lon, 'Campus Universitario', true);
+          state.map.flyTo([CAMPUS_COORDS.lat, CAMPUS_COORDS.lon], 16, { duration: 0.7 });
+          lastUiRenderSec = -1;
+        });
+
+        // Bottone GPS reale (con controllo precisione PC desktop)
+        document.getElementById('btnRealGps')?.addEventListener('click', () => {
+          state.followedBusId = null;
+          if ('geolocation' in navigator) {
+            navigator.geolocation.getCurrentPosition(
+              (pos) => {
+                // Se siamo su PC fisso con accuratezza IP scarsa (> 400m), usa il Campus
+                if (pos.coords.accuracy > 400) {
+                  setUserPosition(CAMPUS_COORDS.lat, CAMPUS_COORDS.lon, 'Campus Universitario (GPS PC)', true);
+                  state.map.flyTo([CAMPUS_COORDS.lat, CAMPUS_COORDS.lon], 16, { duration: 0.7 });
+                } else {
+                  setUserPosition(pos.coords.latitude, pos.coords.longitude, 'La tua posizione GPS', true);
+                  state.map.flyTo([pos.coords.latitude, pos.coords.longitude], 16, { duration: 0.7 });
+                }
+                lastUiRenderSec = -1;
+              },
+              () => {
+                setUserPosition(CAMPUS_COORDS.lat, CAMPUS_COORDS.lon, 'Campus Universitario', true);
+                state.map.flyTo([CAMPUS_COORDS.lat, CAMPUS_COORDS.lon], 16, { duration: 0.7 });
+                lastUiRenderSec = -1;
+              },
+              { enableHighAccuracy: true, timeout: 5000 }
+            );
+          }
+        });
+
+        document.getElementById('fabCenterUser')?.addEventListener('click', () => {
+          state.followedBusId = null;
+          state.map.flyTo([state.userPos.lat, state.userPos.lon], 16, { duration: 0.6 });
+        });
+
+        document.getElementById('fabFitRoute')?.addEventListener('click', () => {
+          state.followedBusId = null;
+          const poly = state.routes[state.direction].polyline;
+          state.map.fitBounds(L.latLngBounds(poly), { padding: [40, 40] });
+        });
+
+        document.getElementById('mobileHandle')?.addEventListener('click', () => {
+          document.getElementById('transitPanel')?.classList.toggle('collapsed');
+        });
+      }
+
+      /* ========================================================================
+         10. LOOP DI ANIMAZIONE 60 FPS E AVVIO
+         ======================================================================== */
+      function animationLoop() {
+        const nowMs = Date.now();
+        const liveBuses = computeLiveBusesForDirection(state.direction, nowMs);
+        const arrivalsInfo = computeArrivalsForSelectedStop(liveBuses, nowMs);
+
+        updateMapBusesAndHighlight(liveBuses, arrivalsInfo);
+        updatePassengerCardUI(arrivalsInfo, nowMs);
+
+        requestAnimationFrame(animationLoop);
+      }
+
+      window.addEventListener('DOMContentLoaded', () => {
+        initMap();
+        renderDirectionRoute();
+        populateStopDropdown();
+        setUserPosition(CAMPUS_COORDS.lat, CAMPUS_COORDS.lon, 'Campus Universitario', true);
+        bindEvents();
+        requestAnimationFrame(animationLoop);
+        fetchOsrmExactRoadGeometry();
       });
-    }
-    if ('caches' in window) {
-      caches.keys().then(keys => {
-        keys.forEach(k => caches.delete(k));
-      });
-    }
+    })();
   </script>
 </body>
 </html>
