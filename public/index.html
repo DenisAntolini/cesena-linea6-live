@@ -517,6 +517,7 @@
         backendSyncActive: false,
         backendBusesByDir: { 0: null, 1: null },
         backendLastSyncMs: 0,
+        lastServerUpdatedAt: null,
         pedestrianAbortCtrl: null,
         pedestrianTimer: null,
         routes: {
@@ -661,31 +662,48 @@
         setTimeout(() => state.map.invalidateSize(), 150);
       }
 
+      // 1. FIX TRACCIATO: Verifica ogni singolo tratto ed evita i giri viziosi OSRM sulle ZTL dei bus
       async function fetchOsrmExactRoadGeometry() {
         const badge = document.getElementById('roadGeometryStatus');
         try {
-          const coordStr = ROAD_CORRIDOR_DIR_0.map(p => `${p[1]},${p[0]}`).join(';');
-          const url = `https://router.project-osrm.org/route/v1/driving/${coordStr}?overview=full&geometries=geojson&continue_straight=false`;
-          const res = await fetch(url);
-          if (!res.ok) return;
-          const data = await res.json();
-          if (data.code === 'Ok' && data.routes?.[0]?.geometry?.coordinates?.length > 80) {
-            const osrmCoords0 = data.routes[0].geometry.coordinates.map(([lon, lat]) => [lat, lon]);
-            const dense0 = densifyPolyline(osrmCoords0, 15);
-            const dense1 = [...dense0].reverse();
+          const cleanCoords = [];
+          for (let i = 0; i < ROAD_CORRIDOR_DIR_0.length - 1; i++) {
+            const p1 = ROAD_CORRIDOR_DIR_0[i];
+            const p2 = ROAD_CORRIDOR_DIR_0[i + 1];
+            const straight = haversineMeters(p1[0], p1[1], p2[0], p2[1]);
+            let seg = [p1, p2];
 
-            state.routes[0].polyline = dense0;
-            state.routes[1].polyline = dense1;
+            try {
+              const url = `https://router.project-osrm.org/route/v1/foot/${p1[1]},${p1[0]};${p2[1]},${p2[0]}?overview=full&geometries=geojson`;
+              const res = await fetch(url);
+              if (res.ok) {
+                const data = await res.json();
+                const route = data.routes?.[0];
+                // Accetta la geometria solo se segue direttamente il viale senza fare anelli (max +20%)
+                if (route && route.distance <= straight * 1.20) {
+                  seg = route.geometry.coordinates.map(([lon, lat]) => [lat, lon]);
+                }
+              }
+            } catch (e) {}
 
-            snapStopsToPolyline(state.routes[0].stops, state.routes[0].polyline);
-            snapStopsToPolyline(state.routes[1].stops, state.routes[1].polyline);
+            if (cleanCoords.length === 0) cleanCoords.push(...seg);
+            else cleanCoords.push(...seg.slice(1));
+          }
 
-            renderDirectionRoute();
-            updateUserAndStopRelation(false);
-            if (badge) {
-              badge.textContent = `Asfalto Reale (${dense0.length} pt)`;
-              badge.className = 'text-[10px] font-semibold text-emerald-700 bg-emerald-50 px-2 py-1 rounded-lg border border-emerald-200 shrink-0';
-            }
+          const dense0 = densifyPolyline(cleanCoords, 15);
+          const dense1 = [...dense0].reverse();
+
+          state.routes[0].polyline = dense0;
+          state.routes[1].polyline = dense1;
+
+          snapStopsToPolyline(state.routes[0].stops, state.routes[0].polyline);
+          snapStopsToPolyline(state.routes[1].stops, state.routes[1].polyline);
+
+          renderDirectionRoute();
+          updateUserAndStopRelation(false);
+          if (badge) {
+            badge.textContent = `Tracciato Bus (${dense0.length} pt)`;
+            badge.className = 'text-[10px] font-semibold text-emerald-700 bg-emerald-50 px-2 py-1 rounded-lg border border-emerald-200 shrink-0';
           }
         } catch (err) {}
       }
@@ -905,6 +923,7 @@
       /* ========================================================================
          8. SINCRONIZZAZIONE API SERVER (/api/linea6/live) + MOTORE 60 FPS
          ======================================================================== */
+      // 2. FIX LOOP BUS: Sincronizza dal backend SOLO se ci sono nuovi dati reali (evita il reset ogni 5s sulla cache di 30s)
       async function pollBackendLiveApi() {
         try {
           const ctrl = new AbortController();
@@ -913,6 +932,20 @@
           clearTimeout(timer);
           if (!res.ok) return;
           const data = await res.json();
+
+          // Se il backend sta usando il simulatore interno con cache a 30s, usa il motore continuo a 60 FPS del client
+          // per evitare che l'autobus torni indietro ogni 5 secondi!
+          if (!data.source || data.source.includes('simulator') || data.source.includes('interpolator')) {
+            state.backendSyncActive = false;
+            return;
+          }
+
+          // Anche con dati reali, aggiorna il timestamp SOLO quando il server ha effettivamente un nuovo pacchetto
+          if (data.updated_at && data.updated_at === state.lastServerUpdatedAt) {
+            return;
+          }
+          state.lastServerUpdatedAt = data.updated_at;
+
           if (!Array.isArray(data.buses) || data.buses.length === 0) return;
 
           const byDir = { 0: [], 1: [] };
@@ -939,13 +972,8 @@
           state.backendBusesByDir = byDir;
           state.backendLastSyncMs = Date.now();
           state.backendSyncActive = true;
-
-          const badge = document.getElementById('liveSourceBadge');
-          if (badge) {
-            badge.innerHTML = `<span class="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-ping"></span> ${data.source === 'infobus' ? 'INFOBUS REALTIME' : 'API LIVE SYNC'}`;
-          }
         } catch (e) {
-          // Funzionamento autonomo se ospitato su Google Sites / statico
+          state.backendSyncActive = false;
         }
       }
 

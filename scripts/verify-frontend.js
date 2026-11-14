@@ -122,6 +122,7 @@ async function run() {
       const optionsCount = stopSelect?.options.length;
       const walkText = document.getElementById('walkText')?.innerText;
       const scheduleText = document.getElementById('scheduleBadge')?.innerText;
+      const roadBadge = document.getElementById('roadGeometryStatus')?.innerText;
       const heroText = document.getElementById('heroArrivalBox')?.innerText;
       const hasLeafletMap = !!document.querySelector('.leaflet-container');
       const hasUserDot = !!document.querySelector('.user-blue-core');
@@ -130,6 +131,7 @@ async function run() {
       return {
         hasLeafletMap,
         optionsCount,
+        roadBadge,
         selectedStopValue,
         selectedStopText,
         walkText,
