@@ -249,7 +249,7 @@
     </div>
 
     <!-- Header Linea 6 Start Romagna -->
-    <div class="flex items-center justify-between pb-3 border-b border-slate-100">
+    <div class="flex items-center justify-between pb-2.5 border-b border-slate-100">
       <div class="flex items-center gap-3">
         <div class="w-11 h-11 rounded-xl bg-[#E30613] text-white font-black text-xl flex items-center justify-center shadow-sm shrink-0">
           6
@@ -257,7 +257,7 @@
         <div>
           <div class="flex items-center gap-2">
             <h1 class="font-bold text-slate-900 text-base leading-tight">Linea 6 • Cesena</h1>
-            <span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200">
+            <span id="liveSourceBadge" class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200">
               <span class="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-ping"></span>
               LIVE GPS
             </span>
@@ -265,13 +265,39 @@
           <p class="text-xs text-slate-500 mt-0.5">Rio Maggiore ⇄ Università ⇄ FS ⇄ Bufalini ⇄ Montefiore</p>
         </div>
       </div>
-      <span id="roadGeometryStatus" class="text-[10px] font-semibold text-blue-600 bg-blue-50 px-2 py-1 rounded-lg border border-blue-100">
+      <span id="roadGeometryStatus" class="text-[10px] font-semibold text-blue-600 bg-blue-50 px-2 py-1 rounded-lg border border-blue-100 shrink-0">
         Strade OSM
       </span>
     </div>
 
+    <!-- Barra Orario Reale + Scelta Rapida Pendolare Mattina/Sera -->
+    <div class="mt-2.5 flex flex-wrap items-center justify-between gap-1.5">
+      <span id="scheduleBadge" class="text-[10px] font-bold px-2 py-1 rounded-lg bg-slate-100 text-slate-700 border border-slate-200">
+        🕒 Calcolo fascia oraria...
+      </span>
+      <div class="flex items-center gap-1">
+        <button id="chipMorningCommute" type="button" title="Andata Mattina: da Stazione FS verso Campus Universitario" class="text-[10px] font-bold px-2 py-1 rounded-lg bg-slate-100 hover:bg-blue-50 hover:text-blue-700 text-slate-600 border border-slate-200 transition">
+          🌅 FS ➔ Campus
+        </button>
+        <button id="chipEveningCommute" type="button" title="Rientro Pomeriggio: da Campus Universitario verso Stazione FS" class="text-[10px] font-bold px-2 py-1 rounded-lg bg-slate-100 hover:bg-blue-50 hover:text-blue-700 text-slate-600 border border-slate-200 transition">
+          🌇 Campus ➔ FS
+        </button>
+      </div>
+    </div>
+
+    <!-- Banner Fine Servizio Notturno (visibile solo tra le 20:45 e le 06:00) -->
+    <div id="nightServiceBanner" class="hidden mt-2.5 p-2.5 rounded-xl bg-slate-900 text-white text-xs flex items-center justify-between gap-2">
+      <div>
+        <div class="font-bold">🌙 Servizio serale terminato</div>
+        <div class="text-[11px] text-slate-300">Prima corsa domani mattina alle <strong>06:05</strong></div>
+      </div>
+      <button id="btnForceDaySim" type="button" class="px-2.5 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-500 text-[11px] font-bold shrink-0 transition">
+        Simula Diurno
+      </button>
+    </div>
+
     <!-- 1. Scelta Direzione e Fermata -->
-    <div class="mt-3 space-y-2.5">
+    <div class="mt-2.5 space-y-2">
       <!-- Selettore Direzione -->
       <div class="grid grid-cols-2 gap-1.5 bg-slate-100 p-1 rounded-xl">
         <button id="btnDir0" type="button" class="py-2 px-2.5 rounded-lg text-xs font-bold transition-all bg-white text-blue-600 shadow-sm flex items-center justify-center gap-1">
@@ -299,10 +325,24 @@
         </button>
       </div>
 
-      <!-- Info distanza a piedi dal punto blu -->
-      <div id="walkBanner" class="flex items-center justify-between text-[11px] bg-blue-50/80 text-blue-900 px-3 py-1.5 rounded-lg border border-blue-100">
-        <span id="walkText">📍 Dal tuo punto: <strong>45m</strong> (~1 min a piedi)</span>
-        <span class="text-[10px] text-blue-600 font-medium">Trascina il punto blu</span>
+      <!-- Info distanza pedonale reale + Sveglia di partenza -->
+      <div id="walkBanner" class="flex items-center justify-between gap-2 text-[11px] bg-blue-50/80 text-blue-900 px-3 py-1.5 rounded-lg border border-blue-100">
+        <span id="walkText" class="truncate">📍 Dal tuo punto: <strong>45m</strong> (~1 min a piedi)</span>
+        <span id="walkModeBadge" class="text-[10px] text-blue-700 bg-blue-100/80 px-1.5 py-0.5 rounded font-semibold shrink-0">Sentiero OSM</span>
+      </div>
+
+      <!-- Pulsante Sveglia "Esci Ora" -->
+      <button id="btnToggleAlarm" type="button" class="w-full py-1.5 px-3 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 text-xs font-bold flex items-center justify-between transition">
+        <span id="alarmBtnText">🔔 Attiva sveglia "Esci ora"</span>
+        <span id="alarmStatusPill" class="text-[10px] font-bold px-2 py-0.5 rounded-full bg-slate-100 text-slate-500">OFF</span>
+      </button>
+
+      <!-- Banner Allarme Attivo quando è il momento di uscire -->
+      <div id="alarmAlertBanner" class="hidden p-3 rounded-xl bg-amber-500 text-white text-xs font-bold shadow-md animate-bounce items-center justify-between gap-2">
+        <span id="alarmAlertText">🚨 ESCI ORA! Il bus è in arrivo!</span>
+        <button id="btnDismissAlarm" type="button" class="px-2 py-1 rounded bg-white/20 hover:bg-white/30 text-[10px] font-extrabold shrink-0">
+          OK
+        </button>
       </div>
     </div>
 
@@ -365,58 +405,31 @@
         { stop_id: 'CE_6025', stop_code: '6025', stop_name: 'Montefiore (Capolinea)', lat: 44.13050, lon: 12.26420 }
       ];
 
-      // Fermate Direzione 1 (Verso Rio Maggiore)
+      // Fermate Direzione 1 (Verso Rio Maggiore: da Montefiore -> Stazione FS -> Università -> Rio Maggiore)
       const STOPS_DIR_1 = [...STOPS_DIR_0].reverse().map((s, idx) => ({
         ...s,
         stop_id: s.stop_id.replace('CE_60', 'CE_61'),
         sequence: idx + 1
       }));
 
-      // Waypoint stradali fedeli alle vie di Cesena (incluso anello Campus Universitario)
       const ROAD_CORRIDOR_DIR_0 = [
-        [44.15240, 12.22250], // Rio Maggiore Capolinea
-        [44.15160, 12.22380], // Via Rio Maggiore
-        [44.15020, 12.22550], // Innesto Via Dismano
-        [44.14840, 12.22650], // Via Dismano Sud
-        [44.14635, 12.22695], // Fermata Torre del Moro
-        [44.14560, 12.22870], // Inizio Viale Gramsci
-        [44.14368, 12.23085], // Fermata Ippodromo Gramsci
-        [44.14315, 12.23485], // Ponte Fiume Savio / Via Calvino
-        [44.14352, 12.23678], // Fermata Ex Zuccherificio (Via Calvino)
-        [44.14390, 12.23745], // Svolta su Via Salvatore Quasimodo
-        [44.14612, 12.23602], // Fermata Quasimodo
-        [44.14740, 12.23495], // Svolta Campus Universitario
-        [44.14752, 12.23532], // Fermata Università (Campus Cesena)
-        [44.14765, 12.23635], // Angolo Via Bacchelli
-        [44.14630, 12.23715], // Discesa Via Umberto Saba
-        [44.14458, 12.23818], // Fermata Saba (Via Umberto Saba)
-        [44.14395, 12.23865], // Svolta Via Werther Ricchi
-        [44.14460, 12.24085], // Rotonda Via Cavalcavia / Viale Europa
-        [44.14502, 12.24275], // Fermata Europa (Architettura / Poste)
-        [44.14545, 12.24495], // Viale Europa Est
-        [44.14640, 12.24620], // Sottopasso / Piazzale Sanguinetti
-        [44.14660, 12.24755], // Fermata Cesena Stazione FS
-        [44.14535, 12.24645], // Piazzale Karl Marx
-        [44.14320, 12.24430], // Viale Carducci Nord
-        [44.14120, 12.24352], // Viale Carducci Sud
-        [44.13915, 12.24345], // Fermata Barriera Cavour
-        [44.13815, 12.24275], // Viale Mazzoni Nord
-        [44.13720, 12.24200], // Fermata Viale Mazzoni
-        [44.13610, 12.24340], // Via Padre Vicinio da Sarsina
-        [44.13510, 12.24520], // Innesto Ponte Nuovo
-        [44.13480, 12.24650], // Fermata Ponte Nuovo / Viale Roma
-        [44.13420, 12.24870], // Viale Roma
-        [44.13360, 12.25120], // Salita Viale Ghirotti
-        [44.13280, 12.25360], // Fermata Ghirotti Ospedale Bufalini
-        [44.13330, 12.25580], // Via Veneto
-        [44.13400, 12.25880], // Fermata Piazzale Olimpia (Stadio)
-        [44.13310, 12.26020], // Rotonda Stadio
-        [44.13180, 12.26230], // Via Leopoldo Lucchi
-        [44.13050, 12.26420]  // Fermata Montefiore (Capolinea)
+        [44.15240, 12.22250], [44.15160, 12.22380], [44.15020, 12.22550],
+        [44.14840, 12.22650], [44.14635, 12.22695], [44.14560, 12.22870],
+        [44.14368, 12.23085], [44.14315, 12.23485], [44.14352, 12.23678],
+        [44.14390, 12.23745], [44.14612, 12.23602], [44.14740, 12.23495],
+        [44.14752, 12.23532], [44.14765, 12.23635], [44.14630, 12.23715],
+        [44.14458, 12.23818], [44.14395, 12.23865], [44.14460, 12.24085],
+        [44.14502, 12.24275], [44.14545, 12.24495], [44.14640, 12.24620],
+        [44.14660, 12.24755], [44.14535, 12.24645], [44.14320, 12.24430],
+        [44.14120, 12.24352], [44.13915, 12.24345], [44.13815, 12.24275],
+        [44.13720, 12.24200], [44.13610, 12.24340], [44.13510, 12.24520],
+        [44.13480, 12.24650], [44.13420, 12.24870], [44.13360, 12.25120],
+        [44.13280, 12.25360], [44.13330, 12.25580], [44.13400, 12.25880],
+        [44.13310, 12.26020], [44.13180, 12.26230], [44.13050, 12.26420]
       ];
 
       /* ========================================================================
-         2. FUNZIONI GEOMETRICHE E ROUTING STRADALE REALE (OSRM + DENSIFICAZIONE)
+         2. FUNZIONI GEOMETRICHE E ROUTING STRADALE / PEDONALE
          ======================================================================== */
       function haversineMeters(lat1, lon1, lat2, lon2) {
         const R = 6371000;
@@ -438,7 +451,6 @@
         return (toDeg(Math.atan2(y, x)) + 360) % 360;
       }
 
-      // Densifica una polilinea in punti distanti al massimo ~18 metri per movimento fluido
       function densifyPolyline(coords, stepMeters = 18) {
         const out = [];
         for (let i = 0; i < coords.length - 1; i++) {
@@ -458,7 +470,6 @@
         return out;
       }
 
-      // Aggancia ogni fermata esattamente al vertice più vicino della polilinea stradale
       function snapStopsToPolyline(stops, polyline) {
         let searchStart = 0;
         stops.forEach((stop, idx) => {
@@ -477,7 +488,6 @@
           stop.shape_index = bestIdx;
           stop.sequence = idx + 1;
         });
-        // Garantisce che i capolinea coincidano con inizio e fine
         stops[0].shape_index = 0;
         stops[0].lat = polyline[0][0];
         stops[0].lon = polyline[0][1];
@@ -488,18 +498,27 @@
       }
 
       /* ========================================================================
-         3. STATO DELL'APPLICAZIONE
+         3. STATO DELL'APPLICAZIONE, PREFERENZE E ORARI REALI
          ======================================================================== */
       const CAMPUS_COORDS = { lat: 44.14710, lon: 12.23550, label: 'Campus Universitario' };
+      const STAZIONE_COORDS = { lat: 44.14660, lon: 12.24755, label: 'Cesena Stazione FS' };
 
       const state = {
         map: null,
         direction: 0, // 0 = Verso Montefiore, 1 = Verso Rio Maggiore
-        selectedStopId: 'CE_6008', // Default: Università (Campus Cesena)
+        selectedStopId: 'CE_6008',
         userPos: { ...CAMPUS_COORDS },
         walkingMeters: 45,
         walkingMinutes: 1,
         followedBusId: null,
+        forceDaySimulation: false,
+        alarmEnabled: false,
+        lastAlertedBusId: null,
+        backendSyncActive: false,
+        backendBusesByDir: { 0: null, 1: null },
+        backendLastSyncMs: 0,
+        pedestrianAbortCtrl: null,
+        pedestrianTimer: null,
         routes: {
           0: { stops: STOPS_DIR_0, polyline: densifyPolyline(ROAD_CORRIDOR_DIR_0, 18) },
           1: { stops: STOPS_DIR_1, polyline: densifyPolyline([...ROAD_CORRIDOR_DIR_0].reverse(), 18) }
@@ -515,12 +534,105 @@
         }
       };
 
-      // Snap iniziale immediato delle fermate
       snapStopsToPolyline(state.routes[0].stops, state.routes[0].polyline);
       snapStopsToPolyline(state.routes[1].stops, state.routes[1].polyline);
 
+      // Calcola fascia oraria reale Start Romagna (Punta, Morbida, Festivo, Fine Servizio)
+      function getScheduleProfile(nowMs) {
+        const d = new Date(nowMs);
+        const day = d.getDay(); // 0 = Domenica
+        const mins = d.getHours() * 60 + d.getMinutes();
+        const isNight = (mins < 360 || mins >= 1245) && !state.forceDaySimulation; // 06:00 - 20:45
+
+        if (isNight) {
+          return {
+            active: false,
+            headwayMin: 15,
+            busCount: 0,
+            badgeText: '🌙 Servizio terminato (06:00–20:45)',
+            badgeClass: 'text-[10px] font-bold px-2 py-1 rounded-lg bg-slate-800 text-white border border-slate-700'
+          };
+        }
+
+        if (day === 0) {
+          return {
+            active: true,
+            headwayMin: 28,
+            busCount: 2,
+            badgeText: '🏖️ Festivo (ogni ~28 min)',
+            badgeClass: 'text-[10px] font-bold px-2 py-1 rounded-lg bg-amber-50 text-amber-800 border border-amber-200'
+          };
+        }
+
+        const isPeak = (mins >= 420 && mins <= 540) || (mins >= 740 && mins <= 870); // 07:00-09:00 e 12:20-14:30
+        if (isPeak) {
+          return {
+            active: true,
+            headwayMin: 10,
+            busCount: 3,
+            badgeText: '⚡ Ora di punta (ogni 10 min)',
+            badgeClass: 'text-[10px] font-bold px-2 py-1 rounded-lg bg-emerald-50 text-emerald-800 border border-emerald-200'
+          };
+        }
+
+        return {
+          active: true,
+          headwayMin: 15,
+          busCount: 3,
+          badgeText: '🕒 Orario feriale (ogni 15 min)',
+          badgeClass: 'text-[10px] font-bold px-2 py-1 rounded-lg bg-slate-100 text-slate-700 border border-slate-200'
+        };
+      }
+
       /* ========================================================================
-         4. INIZIALIZZAZIONE MAPPA E RAFFINAMENTO STRADALE OSRM LIVE
+         4. SVEGLIA DI PARTENZA ("ESCI ORA") CON WEB AUDIO API + NOTIFICHE
+         ======================================================================== */
+      function playDepartureChime() {
+        try {
+          const AudioCtx = window.AudioContext || window.webkitAudioContext;
+          if (!AudioCtx) return;
+          const ctx = new AudioCtx();
+          const notes = [587.33, 880.0]; // Re5 -> La5
+          notes.forEach((freq, idx) => {
+            const osc = ctx.createOscillator();
+            const gain = ctx.createGain();
+            osc.type = 'sine';
+            osc.frequency.setValueAtTime(freq, ctx.currentTime + idx * 0.18);
+            gain.gain.setValueAtTime(0.22, ctx.currentTime + idx * 0.18);
+            gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + idx * 0.18 + 0.45);
+            osc.connect(gain);
+            gain.connect(ctx.destination);
+            osc.start(ctx.currentTime + idx * 0.18);
+            osc.stop(ctx.currentTime + idx * 0.18 + 0.46);
+          });
+        } catch (e) {}
+      }
+
+      function triggerDepartureAlert(arrival) {
+        if (!state.alarmEnabled || !arrival) return;
+        const alertKey = `${arrival.busId}_${state.selectedStopId}`;
+        if (state.lastAlertedBusId === alertKey) return;
+        state.lastAlertedBusId = alertKey;
+
+        playDepartureChime();
+
+        const banner = document.getElementById('alarmAlertBanner');
+        const text = document.getElementById('alarmAlertText');
+        if (banner && text) {
+          text.textContent = `🚨 ESCI ORA! Linea 6 tra ${arrival.etaMinutes} min (${state.walkingMinutes} min a piedi)`;
+          banner.classList.remove('hidden');
+          banner.classList.add('flex');
+        }
+
+        if ('Notification' in window && Notification.permission === 'granted') {
+          new Notification('🚌 Linea 6 Cesena • Esci ora!', {
+            body: `L'autobus arriva tra ${arrival.etaMinutes} min e disti ${state.walkingMinutes} min a piedi dalla fermata.`
+          });
+        }
+      }
+
+      /* ========================================================================
+         5. INIZIALIZZAZIONE MAPPA E ROUTING STRADALE OSRM
          ======================================================================== */
       function initMap() {
         state.map = L.map('map', {
@@ -542,7 +654,6 @@
         state.layers.walkLine = L.layerGroup().addTo(state.map);
         state.layers.stopsGroup = L.layerGroup().addTo(state.map);
 
-        // Click in qualsiasi punto della mappa per spostare l'utente
         state.map.on('click', (e) => {
           setUserPosition(e.latlng.lat, e.latlng.lng, 'Punto scelto sulla mappa', true);
         });
@@ -550,7 +661,6 @@
         setTimeout(() => state.map.invalidateSize(), 150);
       }
 
-      // Richiede a OSRM la geometria precisa dell'asfalto di Cesena passando per tutti i nodi
       async function fetchOsrmExactRoadGeometry() {
         const badge = document.getElementById('roadGeometryStatus');
         try {
@@ -574,16 +684,73 @@
             updateUserAndStopRelation(false);
             if (badge) {
               badge.textContent = `Asfalto Reale (${dense0.length} pt)`;
-              badge.className = 'text-[10px] font-semibold text-emerald-700 bg-emerald-50 px-2 py-1 rounded-lg border border-emerald-200';
+              badge.className = 'text-[10px] font-semibold text-emerald-700 bg-emerald-50 px-2 py-1 rounded-lg border border-emerald-200 shrink-0';
             }
           }
-        } catch (err) {
-          // Mantiene il corridoio stradale densificato precaricato
-        }
+        } catch (err) {}
       }
 
       /* ========================================================================
-         5. DISEGNO PERCORSO, FERMATE E PUNTO BLU UTENTE TRASCINABILE
+         6. PERCORSO PEDONALE REALE SULLA MAPPA (OSRM FOOT ROUTING)
+         ======================================================================== */
+      function updatePedestrianPath(userLat, userLon, stop) {
+        // 1. Disegno immediato di fallback in linea tratteggiata
+        const straightDist = haversineMeters(userLat, userLon, stop.lat, stop.lon);
+        state.walkingMeters = Math.round(straightDist * 1.15);
+        state.walkingMinutes = state.walkingMeters < 60 ? 1 : Math.round(state.walkingMeters / 78);
+
+        const walkText = document.getElementById('walkText');
+        const walkModeBadge = document.getElementById('walkModeBadge');
+        if (walkText) {
+          walkText.innerHTML = `📍 <strong>${state.userPos.label}</strong>: <strong>${state.walkingMeters}m</strong> da ${stop.stop_name} (~${state.walkingMinutes} min)`;
+        }
+        if (walkModeBadge) walkModeBadge.textContent = 'Stima rapida';
+
+        state.layers.walkLine.clearLayers();
+        L.polyline([[userLat, userLon], [stop.lat, stop.lon]], {
+          color: '#1A73E8',
+          weight: 3,
+          dashArray: '4, 7',
+          opacity: 0.8
+        }).addTo(state.layers.walkLine);
+
+        // 2. Calcolo debounced del sentiero pedonale reale su OpenStreetMap
+        if (state.pedestrianTimer) clearTimeout(state.pedestrianTimer);
+        state.pedestrianTimer = setTimeout(async () => {
+          try {
+            if (state.pedestrianAbortCtrl) state.pedestrianAbortCtrl.abort();
+            state.pedestrianAbortCtrl = new AbortController();
+
+            const url = `https://router.project-osrm.org/route/v1/foot/${userLon},${userLat};${stop.lon},${stop.lat}?overview=full&geometries=geojson`;
+            const res = await fetch(url, { signal: state.pedestrianAbortCtrl.signal });
+            if (!res.ok) return;
+            const data = await res.json();
+            const route = data.routes?.[0];
+            if (route && route.geometry?.coordinates?.length > 1) {
+              const footCoords = route.geometry.coordinates.map(([lon, lat]) => [lat, lon]);
+              state.walkingMeters = Math.round(route.distance);
+              state.walkingMinutes = state.walkingMeters < 60 ? 1 : Math.round(state.walkingMeters / 78);
+
+              state.layers.walkLine.clearLayers();
+              L.polyline([[userLat, userLon], ...footCoords, [stop.lat, stop.lon]], {
+                color: '#1A73E8',
+                weight: 3.5,
+                dashArray: '5, 7',
+                opacity: 0.92
+              }).addTo(state.layers.walkLine);
+
+              if (walkText) {
+                walkText.innerHTML = `🚶 <strong>${state.userPos.label}</strong>: <strong>${state.walkingMeters}m</strong> reali (~${state.walkingMinutes} min a piedi)`;
+              }
+              if (walkModeBadge) walkModeBadge.textContent = 'Vialetti OSM';
+              lastUiRenderSec = -1;
+            }
+          } catch (e) {}
+        }, 220);
+      }
+
+      /* ========================================================================
+         7. DISEGNO PERCORSO, FERMATE E PUNTO BLU UTENTE
          ======================================================================== */
       function renderDirectionRoute() {
         state.layers.baseRoute.clearLayers();
@@ -592,7 +759,6 @@
         const routeObj = state.routes[state.direction];
         const poly = routeObj.polyline;
 
-        // Bordo bianco di contrasto stile Google Maps
         L.polyline(poly, {
           color: '#FFFFFF',
           weight: 9,
@@ -601,7 +767,6 @@
           lineJoin: 'round'
         }).addTo(state.layers.baseRoute);
 
-        // Linea base celeste Google Maps Transit
         L.polyline(poly, {
           color: '#93C5FD',
           weight: 5.5,
@@ -610,7 +775,6 @@
           lineJoin: 'round'
         }).addTo(state.layers.baseRoute);
 
-        // Fermate incollate sulla strada
         routeObj.stops.forEach((stop, idx) => {
           const isTerminus = idx === 0 || idx === routeObj.stops.length - 1;
           const isCampus = stop.stop_name.toLowerCase().includes('universit') || stop.stop_name.toLowerCase().includes('quasimodo');
@@ -687,11 +851,21 @@
           if (selectEl) selectEl.value = nearest.stop_id;
         }
 
+        try {
+          localStorage.setItem('linea6_prefs', JSON.stringify({
+            direction: state.direction,
+            selectedStopId: state.selectedStopId,
+            userPos: state.userPos,
+            savedAt: Date.now()
+          }));
+        } catch (e) {}
+
         updateUserAndStopRelation(false);
       }
 
       function selectStopById(stopId, panToStop = false) {
         state.selectedStopId = stopId;
+        state.lastAlertedBusId = null;
         const selectEl = document.getElementById('stopSelect');
         if (selectEl) selectEl.value = stopId;
         updateUserAndStopRelation(panToStop);
@@ -702,26 +876,8 @@
         const stop = stops.find(s => s.stop_id === state.selectedStopId) || stops[0];
         if (!stop) return;
 
-        // Distanza a piedi (fattore tortuosità pedonale 1.18x, velocità 80 m/min)
-        const straightDist = haversineMeters(state.userPos.lat, state.userPos.lon, stop.lat, stop.lon);
-        state.walkingMeters = Math.round(straightDist * 1.15);
-        state.walkingMinutes = state.walkingMeters < 60 ? 1 : Math.round(state.walkingMeters / 80);
+        updatePedestrianPath(state.userPos.lat, state.userPos.lon, stop);
 
-        const walkText = document.getElementById('walkText');
-        if (walkText) {
-          walkText.innerHTML = `📍 <strong>${state.userPos.label}</strong>: a <strong>${state.walkingMeters}m</strong> da ${stop.stop_name} (~${state.walkingMinutes} min a piedi)`;
-        }
-
-        // Disegna linea tratteggiata pedonale tra punto blu utente e fermata scelta
-        state.layers.walkLine.clearLayers();
-        L.polyline([[state.userPos.lat, state.userPos.lon], [stop.lat, stop.lon]], {
-          color: '#1A73E8',
-          weight: 3,
-          dashArray: '4, 7',
-          opacity: 0.85
-        }).addTo(state.layers.walkLine);
-
-        // Pin evidenziato sulla fermata selezionata
         if (state.layers.selectedStopPin) {
           state.map.removeLayer(state.layers.selectedStopPin);
         }
@@ -747,25 +903,88 @@
       }
 
       /* ========================================================================
-         6. SIMULATORE DETERMINISTICO 60 FPS LUNGO LA STRADA REALE
+         8. SINCRONIZZAZIONE API SERVER (/api/linea6/live) + MOTORE 60 FPS
          ======================================================================== */
-      // Calcola lo stato istantaneo dei 3 autobus sulla linea selezionata
-      function computeLiveBusesForDirection(dirId, nowMs) {
+      async function pollBackendLiveApi() {
+        try {
+          const ctrl = new AbortController();
+          const timer = setTimeout(() => ctrl.abort(), 2200);
+          const res = await fetch('/api/linea6/live', { signal: ctrl.signal });
+          clearTimeout(timer);
+          if (!res.ok) return;
+          const data = await res.json();
+          if (!Array.isArray(data.buses) || data.buses.length === 0) return;
+
+          const byDir = { 0: [], 1: [] };
+          data.buses.forEach((b, idx) => {
+            const dId = Number(b.direction_id ?? b.direction ?? 0) === 1 ? 1 : 0;
+            const poly = state.routes[dId].polyline;
+            let bestV = 0;
+            let minD = Infinity;
+            poly.forEach((pt, vIdx) => {
+              const dist = haversineMeters(b.lat, b.lon, pt[0], pt[1]);
+              if (dist < minD) {
+                minD = dist;
+                bestV = vIdx;
+              }
+            });
+            byDir[dId].push({
+              id: b.id || b.bus_id || `API-BUS-${idx}`,
+              label: b.vehicle_label || `Start Romagna ${601 + idx}`,
+              baseRatio: bestV / Math.max(1, poly.length - 1),
+              delayMinutes: Number(b.delay_minutes || 0)
+            });
+          });
+
+          state.backendBusesByDir = byDir;
+          state.backendLastSyncMs = Date.now();
+          state.backendSyncActive = true;
+
+          const badge = document.getElementById('liveSourceBadge');
+          if (badge) {
+            badge.innerHTML = `<span class="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-ping"></span> ${data.source === 'infobus' ? 'INFOBUS REALTIME' : 'API LIVE SYNC'}`;
+          }
+        } catch (e) {
+          // Funzionamento autonomo se ospitato su Google Sites / statico
+        }
+      }
+
+      function computeLiveBusesForDirection(dirId, nowMs, schedule) {
+        if (!schedule.active) return [];
+
         const routeObj = state.routes[dirId];
         const poly = routeObj.polyline;
         const stops = routeObj.stops;
         const totalVertices = poly.length;
-
-        // Durata intera corsa da capolinea a capolinea: 24 minuti (1440 secondi)
-        const tripDurationSec = 1440;
+        const tripDurationSec = 1440; // 24 minuti da capolinea a capolinea
         const nowSec = nowMs / 1000;
 
-        // 3 vetture distanziate lungo la linea
-        const offsetsSec = [0, 480, 960];
-        const buses = [];
+        // Usa i veicoli sincronizzati da /api/linea6/live se freschi (< 30s), altrimenti gli slot orari reali
+        const apiBuses = (state.backendSyncActive && (nowMs - state.backendLastSyncMs < 30000) && state.backendBusesByDir[dirId]?.length)
+          ? state.backendBusesByDir[dirId]
+          : null;
 
-        offsetsSec.forEach((offset, idx) => {
-          const cyclePos = ((nowSec + offset) % tripDurationSec) / tripDurationSec; // [0..1)
+        const buses = [];
+        const count = apiBuses ? apiBuses.length : schedule.busCount;
+        const headwaySec = schedule.headwayMin * 60;
+
+        for (let idx = 0; idx < count; idx++) {
+          let cyclePos;
+          let busId;
+          let label;
+
+          if (apiBuses) {
+            const elapsedSinceSyncSec = (nowMs - state.backendLastSyncMs) / 1000;
+            cyclePos = (apiBuses[idx].baseRatio + (elapsedSinceSyncSec / tripDurationSec)) % 1;
+            busId = apiBuses[idx].id;
+            label = apiBuses[idx].label;
+          } else {
+            const offsetSec = idx * headwaySec;
+            cyclePos = ((nowSec + offsetSec) % tripDurationSec) / tripDurationSec;
+            busId = `CE-60${idx + 1}-D${dirId}`;
+            label = `Start Romagna ${601 + idx + dirId * 10}`;
+          }
+
           const exactVertex = cyclePos * (totalVertices - 1);
           const vIdx = Math.min(Math.floor(exactVertex), totalVertices - 2);
           const frac = exactVertex - vIdx;
@@ -776,7 +995,6 @@
           const lon = pA[1] + (pB[1] - pA[1]) * frac;
           const bearing = computeBearing(pA[0], pA[1], pB[0], pB[1]);
 
-          // Individua fermata precedente e successiva
           let currentStopIdx = 0;
           for (let s = 0; s < stops.length - 1; s++) {
             if (vIdx >= stops[s].shape_index) {
@@ -786,38 +1004,34 @@
           const nextStopIdx = Math.min(currentStopIdx + 1, stops.length - 1);
           const currentStop = stops[currentStopIdx];
           const nextStop = stops[nextStopIdx];
-
           const distToStopM = haversineMeters(lat, lon, currentStop.lat, currentStop.lon);
-          const isAtStop = distToStopM < 24;
 
           buses.push({
-            id: `CE-60${idx + 1}-D${dirId}`,
-            label: `Start Romagna ${601 + idx + dirId * 10}`,
+            id: busId,
+            label,
             direction: dirId,
             destination: dirId === 0 ? 'Montefiore' : 'Rio Maggiore',
             lat,
             lon,
             bearing,
             vertexIndex: vIdx,
-            status: isAtStop ? 'STOPPED_AT' : 'IN_TRANSIT_TO',
+            status: distToStopM < 24 ? 'STOPPED_AT' : 'IN_TRANSIT_TO',
             currentStopIndex: currentStopIdx,
             nextStopIndex: nextStopIdx,
             currentStop,
-            nextStop,
-            remainingRatioToEnd: 1 - cyclePos
+            nextStop
           });
-        });
+        }
 
         return buses;
       }
 
-      // Calcola i prossimi 4 arrivi per la fermata selezionata dall'utente
-      function computeArrivalsForSelectedStop(liveBuses, nowMs) {
+      function computeArrivalsForSelectedStop(liveBuses, nowMs, schedule) {
         const routeObj = state.routes[state.direction];
         const stops = routeObj.stops;
         const poly = routeObj.polyline;
         const totalVertices = poly.length;
-        const tripDurationSec = 1440; // 24 min
+        const tripDurationSec = 1440;
 
         const userStopIdx = stops.findIndex(s => s.stop_id === state.selectedStopId);
         const targetStop = stops[userStopIdx >= 0 ? userStopIdx : 0];
@@ -825,33 +1039,33 @@
 
         const arrivals = [];
 
-        // 1. Autobus LIVE che non hanno ancora superato la fermata dell'utente
-        liveBuses.forEach(bus => {
-          if (bus.vertexIndex <= targetVertex) {
-            const verticesAway = targetVertex - bus.vertexIndex;
-            const etaSeconds = Math.round((verticesAway / totalVertices) * tripDurationSec);
-            const etaMinutes = Math.max(0, Math.round(etaSeconds / 60));
-            const stopsAway = Math.max(0, (userStopIdx >= 0 ? userStopIdx : 0) - bus.currentStopIndex);
+        if (schedule.active) {
+          liveBuses.forEach(bus => {
+            if (bus.vertexIndex <= targetVertex) {
+              const verticesAway = targetVertex - bus.vertexIndex;
+              const etaSeconds = Math.round((verticesAway / totalVertices) * tripDurationSec);
+              const etaMinutes = Math.max(0, Math.round(etaSeconds / 60));
+              const stopsAway = Math.max(0, (userStopIdx >= 0 ? userStopIdx : 0) - bus.currentStopIndex);
 
-            arrivals.push({
-              busId: bus.id,
-              vehicleLabel: bus.label,
-              destination: bus.destination,
-              isLive: true,
-              etaSeconds,
-              etaMinutes,
-              stopsAway,
-              bus
-            });
-          }
-        });
+              arrivals.push({
+                busId: bus.id,
+                vehicleLabel: bus.label,
+                destination: bus.destination,
+                isLive: true,
+                etaSeconds,
+                etaMinutes,
+                stopsAway,
+                bus
+              });
+            }
+          });
 
-        arrivals.sort((a, b) => a.etaSeconds - b.etaSeconds);
+          arrivals.sort((a, b) => a.etaSeconds - b.etaSeconds);
+        }
 
-        // 2. Completa fino a 4 passaggi con le corse successive (frequenza 12 min)
-        let lastEtaMin = arrivals.length > 0 ? arrivals[arrivals.length - 1].etaMinutes : 3;
+        let lastEtaMin = arrivals.length > 0 ? arrivals[arrivals.length - 1].etaMinutes : 4;
         while (arrivals.length < 4) {
-          lastEtaMin += 12;
+          lastEtaMin += schedule.headwayMin;
           arrivals.push({
             busId: null,
             vehicleLabel: 'Corsa Start Romagna',
@@ -863,7 +1077,6 @@
           });
         }
 
-        // Aggiunge orario previsto HH:MM e semaforo "Riuscirò a prenderlo?"
         arrivals.forEach(arr => {
           const arrivalDate = new Date(nowMs + arr.etaSeconds * 1000);
           arr.clockTime = arrivalDate.toLocaleTimeString('it-IT', { hour: '2-digit', minute: '2-digit' });
@@ -890,17 +1103,25 @@
           }
         });
 
+        // Controllo sveglia di partenza sul primo autobus prendibile
+        const firstCatchable = arrivals.find(a => a.etaMinutes >= state.walkingMinutes);
+        if (schedule.active && state.alarmEnabled && firstCatchable) {
+          const margin = firstCatchable.etaMinutes - state.walkingMinutes;
+          if (margin <= 2 && margin >= 0) {
+            triggerDepartureAlert(firstCatchable);
+          }
+        }
+
         return { targetStop, arrivals };
       }
 
       /* ========================================================================
-         7. RENDERING MARKER AUTOBUS E TRATTO BLU DI AVVICINAMENTO
+         9. RENDERING MAPPA E CARD UTENTE
          ======================================================================== */
       function updateMapBusesAndHighlight(liveBuses, arrivalsInfo) {
         const primaryBusId = arrivalsInfo.arrivals[0]?.busId || null;
         const activeIds = new Set(liveBuses.map(b => b.id));
 
-        // Rimuovi marker di direzioni non attive
         for (const [id, marker] of state.layers.busMarkers.entries()) {
           if (!activeIds.has(id)) {
             state.map.removeLayer(marker);
@@ -962,7 +1183,6 @@
           }
         });
 
-        // Evidenzia in Blu Google Maps acceso (#1A73E8) il tratto stradale tra il prossimo bus e la fermata dell'utente
         state.layers.activeApproach.clearLayers();
         const firstArrival = arrivalsInfo.arrivals[0];
         if (firstArrival?.isLive && firstArrival.bus) {
@@ -984,12 +1204,9 @@
         }
       }
 
-      /* ========================================================================
-         8. AGGIORNAMENTO CARD INTERFACCIA UTENTE (OGNI SECONDO)
-         ======================================================================== */
       let lastUiRenderSec = -1;
 
-      function updatePassengerCardUI(arrivalsInfo, nowMs) {
+      function updatePassengerCardUI(arrivalsInfo, nowMs, schedule) {
         const nowSec = Math.floor(nowMs / 1000);
         if (nowSec === lastUiRenderSec) return;
         lastUiRenderSec = nowSec;
@@ -1003,19 +1220,35 @@
           });
         }
 
+        const schedBadge = document.getElementById('scheduleBadge');
+        if (schedBadge) {
+          schedBadge.textContent = schedule.badgeText;
+          schedBadge.className = schedule.badgeClass;
+        }
+
+        const nightBanner = document.getElementById('nightServiceBanner');
+        if (nightBanner) {
+          nightBanner.classList.toggle('hidden', schedule.active);
+        }
+
         const first = arrivalsInfo.arrivals[0];
         const heroBox = document.getElementById('heroArrivalBox');
         if (heroBox && first) {
-          const etaLabel = first.etaMinutes <= 0 ? 'In arrivo ora' : `tra ${first.etaMinutes} min`;
-          const subStatus = first.isLive
-            ? `<span class="text-emerald-600 font-bold">((•)) IN TEMPO REALE</span> • a <strong>${first.stopsAway} fermate</strong> da te (ora a <em>${first.bus.currentStop.stop_name}</em>)`
-            : `📅 Corsa programmata • a ${first.stopsAway} fermate da te`;
+          const etaLabel = !schedule.active
+            ? 'Domani 06:05'
+            : (first.etaMinutes <= 0 ? 'In arrivo ora' : `tra ${first.etaMinutes} min`);
+
+          const subStatus = !schedule.active
+            ? '🌙 Nessun bus notturno in circolazione • Premi "Simula Diurno" per testare la mappa'
+            : (first.isLive
+                ? `<span class="text-emerald-600 font-bold">((•)) IN TEMPO REALE</span> • a <strong>${first.stopsAway} fermate</strong> da te (ora a <em>${first.bus.currentStop.stop_name}</em>)`
+                : `📅 Corsa programmata da orario Start Romagna • a ${first.stopsAway} fermate da te`);
 
           heroBox.innerHTML = `
             <div class="flex items-baseline justify-between">
               <div class="text-3xl font-black text-slate-900 tracking-tight">${etaLabel}</div>
               <div class="text-xs font-bold text-slate-500 bg-white px-2.5 py-1 rounded-lg border border-slate-200">
-                ore ${first.clockTime}
+                ore ${ schedule.active ? first.clockTime : '06:05' }
               </div>
             </div>
             <div class="text-xs text-slate-600 mt-1.5 leading-snug">
@@ -1042,7 +1275,6 @@
           }
         }
 
-        // Lista 3 passaggi successivi
         const subList = document.getElementById('subsequentBusesList');
         if (subList) {
           const nextThree = arrivalsInfo.arrivals.slice(1, 4);
@@ -1053,7 +1285,7 @@
                 <div>
                   <div class="text-xs font-bold text-slate-800">➔ ${item.destination}</div>
                   <div class="text-[10px] text-slate-500">
-                    ${item.isLive ? '🟢 GPS Live in viaggio' : '🕒 Corsa programmata'} • ${item.catchState.code === 'EASY' ? 'Fai in tempo comodamente' : 'In orario'}
+                    ${item.isLive ? '🟢 GPS Live in viaggio' : '🕒 Corsa da orario'} • ${item.catchState.code === 'EASY' ? 'Fai in tempo comodamente' : 'In orario'}
                   </div>
                 </div>
               </div>
@@ -1078,7 +1310,7 @@
       }
 
       /* ========================================================================
-         9. CONTROLLI UI E POPOLAMENTO MENU FERMATE
+         10. INVERSIONE AUTOMATICA MATTINA/SERA E CONTROLLI UI
          ======================================================================== */
       function populateStopDropdown() {
         const selectEl = document.getElementById('stopSelect');
@@ -1090,30 +1322,87 @@
         selectEl.value = state.selectedStopId;
       }
 
-      function switchDirection(newDir) {
-        if (state.direction === newDir) return;
-        state.direction = newDir;
-        state.followedBusId = null;
-
+      function updateDirectionButtonsUI() {
         const btn0 = document.getElementById('btnDir0');
         const btn1 = document.getElementById('btnDir1');
-        if (newDir === 0) {
+        if (!btn0 || !btn1) return;
+        if (state.direction === 0) {
           btn0.className = 'py-2 px-2.5 rounded-lg text-xs font-bold transition-all bg-white text-blue-600 shadow-sm flex items-center justify-center gap-1';
           btn1.className = 'py-2 px-2.5 rounded-lg text-xs font-bold transition-all text-slate-600 hover:text-slate-900 flex items-center justify-center gap-1';
         } else {
           btn1.className = 'py-2 px-2.5 rounded-lg text-xs font-bold transition-all bg-white text-blue-600 shadow-sm flex items-center justify-center gap-1';
           btn0.className = 'py-2 px-2.5 rounded-lg text-xs font-bold transition-all text-slate-600 hover:text-slate-900 flex items-center justify-center gap-1';
         }
+      }
 
+      function switchDirection(newDir, customStopId = null) {
+        state.direction = newDir;
+        state.followedBusId = null;
+        updateDirectionButtonsUI();
         renderDirectionRoute();
-        setUserPosition(state.userPos.lat, state.userPos.lon, state.userPos.label, true);
+
+        if (customStopId) {
+          state.selectedStopId = customStopId;
+          setUserPosition(state.userPos.lat, state.userPos.lon, state.userPos.label, false);
+        } else {
+          setUserPosition(state.userPos.lat, state.userPos.lon, state.userPos.label, true);
+        }
+
         populateStopDropdown();
         lastUiRenderSec = -1;
+      }
+
+      // Preset 1: Mattina (Stazione FS -> Università, Direzione 1 Verso Rio Maggiore)
+      function applyMorningCommute(pan = true) {
+        state.userPos = { ...STAZIONE_COORDS };
+        renderUserMarker();
+        switchDirection(1, 'CE_6111');
+        if (pan && state.map) state.map.flyTo([STAZIONE_COORDS.lat, STAZIONE_COORDS.lon], 15, { duration: 0.7 });
+      }
+
+      // Preset 2: Pomeriggio/Sera (Campus Universitario -> Stazione FS, Direzione 0 Verso Montefiore)
+      function applyEveningCommute(pan = true) {
+        state.userPos = { ...CAMPUS_COORDS };
+        renderUserMarker();
+        switchDirection(0, 'CE_6008');
+        if (pan && state.map) state.map.flyTo([CAMPUS_COORDS.lat, CAMPUS_COORDS.lon], 16, { duration: 0.7 });
+      }
+
+      function initSmartCommuteDefault() {
+        try {
+          const raw = localStorage.getItem('linea6_prefs');
+          if (raw) {
+            const saved = JSON.parse(raw);
+            // Usa l'ultima posizione se salvata negli ultimi 45 minuti
+            if (saved && (Date.now() - saved.savedAt < 45 * 60 * 1000)) {
+              state.userPos = saved.userPos || { ...CAMPUS_COORDS };
+              renderUserMarker();
+              switchDirection(saved.direction || 0, saved.selectedStopId || 'CE_6008');
+              return;
+            }
+          }
+        } catch (e) {}
+
+        // Inversione automatica: Mattina (< 12:30) FS -> Campus | Pomeriggio (>= 12:30) Campus -> FS
+        const hour = new Date().getHours();
+        if (hour >= 6 && hour < 12) {
+          applyMorningCommute(false);
+        } else {
+          applyEveningCommute(false);
+        }
       }
 
       function bindEvents() {
         document.getElementById('btnDir0')?.addEventListener('click', () => switchDirection(0));
         document.getElementById('btnDir1')?.addEventListener('click', () => switchDirection(1));
+
+        document.getElementById('chipMorningCommute')?.addEventListener('click', () => applyMorningCommute(true));
+        document.getElementById('chipEveningCommute')?.addEventListener('click', () => applyEveningCommute(true));
+
+        document.getElementById('btnForceDaySim')?.addEventListener('click', () => {
+          state.forceDaySimulation = true;
+          lastUiRenderSec = -1;
+        });
 
         document.getElementById('stopSelect')?.addEventListener('change', (e) => {
           state.followedBusId = null;
@@ -1121,21 +1410,15 @@
           lastUiRenderSec = -1;
         });
 
-        // Bottone rapido Campus Universitario
         document.getElementById('btnLocateCampus')?.addEventListener('click', () => {
-          state.followedBusId = null;
-          setUserPosition(CAMPUS_COORDS.lat, CAMPUS_COORDS.lon, 'Campus Universitario', true);
-          state.map.flyTo([CAMPUS_COORDS.lat, CAMPUS_COORDS.lon], 16, { duration: 0.7 });
-          lastUiRenderSec = -1;
+          applyEveningCommute(true);
         });
 
-        // Bottone GPS reale (con controllo precisione PC desktop)
         document.getElementById('btnRealGps')?.addEventListener('click', () => {
           state.followedBusId = null;
           if ('geolocation' in navigator) {
             navigator.geolocation.getCurrentPosition(
               (pos) => {
-                // Se siamo su PC fisso con accuratezza IP scarsa (> 400m), usa il Campus
                 if (pos.coords.accuracy > 400) {
                   setUserPosition(CAMPUS_COORDS.lat, CAMPUS_COORDS.lon, 'Campus Universitario (GPS PC)', true);
                   state.map.flyTo([CAMPUS_COORDS.lat, CAMPUS_COORDS.lon], 16, { duration: 0.7 });
@@ -1155,6 +1438,40 @@
           }
         });
 
+        // Gestione Sveglia "Esci ora"
+        document.getElementById('btnToggleAlarm')?.addEventListener('click', () => {
+          state.alarmEnabled = !state.alarmEnabled;
+          state.lastAlertedBusId = null;
+          const btn = document.getElementById('btnToggleAlarm');
+          const txt = document.getElementById('alarmBtnText');
+          const pill = document.getElementById('alarmStatusPill');
+
+          if (state.alarmEnabled) {
+            playDepartureChime();
+            if ('Notification' in window && Notification.permission === 'default') {
+              Notification.requestPermission();
+            }
+            if (btn) btn.className = 'w-full py-1.5 px-3 rounded-xl border border-amber-300 bg-amber-50 text-amber-900 text-xs font-bold flex items-center justify-between transition';
+            if (txt) txt.textContent = '🔔 Sveglia attiva (avviso a +2 min margine)';
+            if (pill) {
+              pill.textContent = 'ON';
+              pill.className = 'text-[10px] font-bold px-2 py-0.5 rounded-full bg-amber-500 text-white';
+            }
+          } else {
+            if (btn) btn.className = 'w-full py-1.5 px-3 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 text-xs font-bold flex items-center justify-between transition';
+            if (txt) txt.textContent = '🔔 Attiva sveglia "Esci ora"';
+            if (pill) {
+              pill.textContent = 'OFF';
+              pill.className = 'text-[10px] font-bold px-2 py-0.5 rounded-full bg-slate-100 text-slate-500';
+            }
+            document.getElementById('alarmAlertBanner')?.classList.add('hidden');
+          }
+        });
+
+        document.getElementById('btnDismissAlarm')?.addEventListener('click', () => {
+          document.getElementById('alarmAlertBanner')?.classList.add('hidden');
+        });
+
         document.getElementById('fabCenterUser')?.addEventListener('click', () => {
           state.followedBusId = null;
           state.map.flyTo([state.userPos.lat, state.userPos.lon], 16, { duration: 0.6 });
@@ -1172,27 +1489,28 @@
       }
 
       /* ========================================================================
-         10. LOOP DI ANIMAZIONE 60 FPS E AVVIO
+         11. LOOP DI ANIMAZIONE 60 FPS E AVVIO
          ======================================================================== */
       function animationLoop() {
         const nowMs = Date.now();
-        const liveBuses = computeLiveBusesForDirection(state.direction, nowMs);
-        const arrivalsInfo = computeArrivalsForSelectedStop(liveBuses, nowMs);
+        const schedule = getScheduleProfile(nowMs);
+        const liveBuses = computeLiveBusesForDirection(state.direction, nowMs, schedule);
+        const arrivalsInfo = computeArrivalsForSelectedStop(liveBuses, nowMs, schedule);
 
         updateMapBusesAndHighlight(liveBuses, arrivalsInfo);
-        updatePassengerCardUI(arrivalsInfo, nowMs);
+        updatePassengerCardUI(arrivalsInfo, nowMs, schedule);
 
         requestAnimationFrame(animationLoop);
       }
 
       window.addEventListener('DOMContentLoaded', () => {
         initMap();
-        renderDirectionRoute();
-        populateStopDropdown();
-        setUserPosition(CAMPUS_COORDS.lat, CAMPUS_COORDS.lon, 'Campus Universitario', true);
+        initSmartCommuteDefault();
         bindEvents();
         requestAnimationFrame(animationLoop);
         fetchOsrmExactRoadGeometry();
+        pollBackendLiveApi();
+        setInterval(pollBackendLiveApi, 5000);
       });
     })();
   </script>

@@ -120,19 +120,21 @@ async function run() {
       const selectedStopText = stopSelect?.options[stopSelect.selectedIndex]?.text;
       const selectedStopValue = stopSelect?.value;
       const optionsCount = stopSelect?.options.length;
-      const gpsNote = document.getElementById('gpsStatusNote')?.innerText;
-      const nextBusText = document.getElementById('nextBusContainer')?.innerText;
+      const walkText = document.getElementById('walkText')?.innerText;
+      const scheduleText = document.getElementById('scheduleBadge')?.innerText;
+      const heroText = document.getElementById('heroArrivalBox')?.innerText;
       const hasLeafletMap = !!document.querySelector('.leaflet-container');
-      const hasUserDot = !!document.querySelector('.user-location-dot');
-      const busMarkers = document.querySelectorAll('.gmaps-bus-div-icon').length;
+      const hasUserDot = !!document.querySelector('.user-blue-core');
+      const busMarkers = document.querySelectorAll('.bus-live-wrapper').length;
 
       return {
         hasLeafletMap,
         optionsCount,
         selectedStopValue,
         selectedStopText,
-        gpsNote,
-        nextBusSummary: nextBusText.replace(/\\n+/g, ' | ').slice(0, 150),
+        walkText,
+        scheduleText,
+        heroSummary: (heroText || '').replace(/\\n+/g, ' | ').slice(0, 150),
         hasUserDot,
         busMarkers
       };
