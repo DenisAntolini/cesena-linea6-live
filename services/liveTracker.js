@@ -269,7 +269,16 @@ async function fetchStopBoard(targetId, palina) {
       const vehicleId = btn.attr('data-vehicle') || null;
 
       const destUpper = destText.toUpperCase();
-      const directionId = destUpper.includes('MONTEFIORE') ? '0' : (destUpper.includes('RIO MAGGIORE') ? '1' : null);
+      let directionId = null;
+      if (destUpper.includes('MONTEFIORE')) {
+        directionId = '0';
+      } else if (destUpper.includes('RIO MAGGIORE')) {
+        directionId = '1';
+      } else if (tripId && /^F_A/i.test(tripId)) {
+        directionId = '0';
+      } else if (tripId && /^F_R/i.test(tripId)) {
+        directionId = '1';
+      }
 
       const parsedStatus = parseStartRomagnaStatus(statusText, scheduledTime, nowRome);
 
@@ -360,8 +369,10 @@ async function getRealLiveBuses(staticData) {
   // Fermate sonda per catturare tutti i bus in circolazione su entrambe le direzioni
   const probeStops = [
     { target_id: '2985', palina: '6721' }, // Quasimodo (passano entrambe le direzioni)
-    { target_id: '2495', palina: '5161' }, // Cesena FS
-    { target_id: '2602', palina: '5692' }, // Ghirotti Ospedale
+    { target_id: '2495', palina: '5161' }, // Cesena FS (dir. Montefiore)
+    { target_id: '2494', palina: '5160' }, // Cesena FS (dir. Rio Maggiore)
+    { target_id: '2602', palina: '5692' }, // Ghirotti Ospedale (dir. Montefiore)
+    { target_id: '2601', palina: '5691' }, // Ghirotti Ospedale (dir. Rio Maggiore)
     { target_id: '2983', palina: '6700' }, // Rio Maggiore
     { target_id: '2994', palina: '6770' }  // Montefiore
   ];
@@ -397,7 +408,17 @@ async function getRealLiveBuses(staticData) {
     if (!rawPercorso || rawPercorso.length < 2) continue;
 
     // Seleziona la direzione del bus e filtra rigorosamente le fermate su quelle note
-    const dirId = String(tripMeta.direction_id || (tripMeta.destination?.includes('Montefiore') ? '0' : '1'));
+    let resolvedDir = tripMeta.direction_id;
+    if (!resolvedDir && tripId) {
+      if (/^F_A/i.test(tripId)) resolvedDir = '0';
+      else if (/^F_R/i.test(tripId)) resolvedDir = '1';
+    }
+    if (!resolvedDir && tripMeta.destination) {
+      const destUp = tripMeta.destination.toUpperCase();
+      if (destUp.includes('MONTEFIORE')) resolvedDir = '0';
+      else if (destUp.includes('RIO MAGGIORE')) resolvedDir = '1';
+    }
+    const dirId = String(resolvedDir || '0');
     const validStopsList = (dirId === '1' ? stopsDir1 : stopsDir0);
     const validStopsMap = new Map();
     validStopsList.forEach(s => validStopsMap.set(String(s.stop_id), s));
