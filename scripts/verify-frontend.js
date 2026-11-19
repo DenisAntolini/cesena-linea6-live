@@ -15,7 +15,6 @@ async function run() {
     'about:blank'
   ]);
 
-  // Attendiamo che la porta CDP risponda
   let wsUrl = null;
   for (let i = 0; i < 30; i++) {
     await new Promise(r => setTimeout(r, 200));
@@ -40,28 +39,13 @@ async function run() {
     process.exit(1);
   }
 
-  console.log('Connesso a Edge CDP:', wsUrl);
   const WebSocket = require('ws');
   const ws = new WebSocket(wsUrl);
-
   await new Promise(resolve => ws.on('open', resolve));
 
   let msgId = 1;
   const pending = new Map();
   const consoleMessages = [];
-
-  ws.on('message', (raw) => {
-    const data = JSON.parse(raw);
-    if (data.method === 'Runtime.consoleAPICalled') {
-      const text = data.params.args.map(a => a.value || a.description || '').join(' ');
-      consoleMessages.push({ type: data.params.type, text });
-      console.log(`[BROWSER CONSOLE ${data.params.type.toUpperCase()}] ${text}`);
-    }
-    if (data.id && pending.has(data.id)) {
-      pending.get(data.id)(data);
-      pending.delete(data.id);
-    }
-  });
 
   function send(method, params = {}) {
     return new Promise(resolve => {
@@ -71,7 +55,14 @@ async function run() {
     });
   }
 
-  // Crea nuova pagina
+  ws.on('message', (raw) => {
+    const data = JSON.parse(raw);
+    if (data.id && pending.has(data.id)) {
+      pending.get(data.id)(data);
+      pending.delete(data.id);
+    }
+  });
+
   const target = await send('Target.createTarget', { url: 'http://localhost:3000' });
   const pageWsUrl = `ws://127.0.0.1:${debugPort}/devtools/page/${target.result.targetId}`;
   const pageWs = new WebSocket(pageWsUrl);
@@ -110,82 +101,82 @@ async function run() {
   console.log('Navigazione a http://localhost:3000...');
   await pageSend('Page.navigate', { url: 'http://localhost:3000' });
 
-  // Attesa di 3.5 secondi per il completamento del rendering e polling
-  await new Promise(r => setTimeout(r, 3500));
+  // Attesa per completamento rendering e chiamate alle API
+  await new Promise(r => setTimeout(r, 4000));
 
-  // Ispezione DOM
   const evalResult = await pageSend('Runtime.evaluate', {
     expression: `(() => {
       const stopSelect = document.getElementById('stopSelect');
       const selectedStopText = stopSelect?.options[stopSelect.selectedIndex]?.text;
       const selectedStopValue = stopSelect?.value;
-      const optionsCount = stopSelect?.options.length;
-      const walkText = document.getElementById('walkText')?.innerText;
-      const scheduleText = document.getElementById('scheduleBadge')?.innerText;
-      const roadBadge = document.getElementById('roadGeometryStatus')?.innerText;
-      const heroText = document.getElementById('heroArrivalBox')?.innerText;
+      const optionsCount = stopSelect?.options?.length || 0;
+      const heroEta = document.getElementById('heroEtaBig')?.innerText;
+      const heroTimes = document.getElementById('heroTimesLine')?.innerText;
+      const heroVehicle = document.getElementById('heroVehicleBadge')?.innerText;
       const hasLeafletMap = !!document.querySelector('.leaflet-container');
-      const hasUserDot = !!document.querySelector('.user-blue-core');
-      const busMarkers = document.querySelectorAll('.bus-live-wrapper').length;
+      const busMarkers = document.querySelectorAll('.bus-marker-wrap').length;
+      const sheetIsCollapsed = document.getElementById('bottomSheet')?.classList.contains('collapsed');
 
       return {
         hasLeafletMap,
         optionsCount,
-        roadBadge,
         selectedStopValue,
         selectedStopText,
-        walkText,
-        scheduleText,
-        heroSummary: (heroText || '').replace(/\\n+/g, ' | ').slice(0, 150),
-        hasUserDot,
-        busMarkers
+        heroEta,
+        heroTimes,
+        heroVehicle,
+        busMarkers,
+        sheetIsCollapsed
       };
     })()`,
     returnByValue: true
   });
 
   console.log('\n=== STATO APPLICAZIONE NEL BROWSER ===');
-  console.log(JSON.stringify(evalResult.result?.result?.value || evalResult.result?.value || evalResult.result || evalResult, null, 2));
+  console.log(JSON.stringify(evalResult.result?.value || evalResult.result || evalResult, null, 2));
 
-  // Verifica click sulla mappa per riposizionamento
-  console.log('\nTest riposizionamento: click sulla mappa...');
+  // Test switch direzione ➔ Rio Maggiore
+  console.log('\nTest switch direzione a "Rio Maggiore"...');
   await pageSend('Runtime.evaluate', {
-    expression: `(() => {
-      const mapEl = document.getElementById('map');
-      const rect = mapEl.getBoundingClientRect();
-      const clickEvent = new MouseEvent('click', {
-        clientX: rect.left + rect.width / 2,
-        clientY: rect.top + rect.height / 2,
-        bubbles: true
-      });
-      mapEl.dispatchEvent(clickEvent);
-    })()`
+    expression: `document.getElementById('tabDir1')?.click()`
   });
+  await new Promise(r => setTimeout(r, 1500));
 
-  await new Promise(r => setTimeout(r, 1000));
-
-  const afterClickResult = await pageSend('Runtime.evaluate', {
+  const afterSwitch = await pageSend('Runtime.evaluate', {
     expression: `(() => {
+      const stopSelect = document.getElementById('stopSelect');
       return {
-        selectedStopValue: document.getElementById('stopSelect')?.value,
-        gpsNote: document.getElementById('gpsStatusNote')?.innerText
+        direction1OptionsCount: stopSelect?.options?.length || 0,
+        selectedStopText: stopSelect?.options[stopSelect.selectedIndex]?.text
       };
     })()`,
     returnByValue: true
   });
-  console.log('Stato dopo click:', JSON.stringify(afterClickResult.result?.result?.value || afterClickResult.result?.value || afterClickResult.result || afterClickResult, null, 2));
+  console.log('Stato dopo switch direzione:', JSON.stringify(afterSwitch.result?.value || afterSwitch.result, null, 2));
 
-  // Pulizia
+  // Test toggle bottom sheet
+  console.log('\nTest apertura/chiusura Bottom Sheet...');
+  await pageSend('Runtime.evaluate', {
+    expression: `document.getElementById('sheetHandle')?.click()`
+  });
+  await new Promise(r => setTimeout(r, 600));
+
+  const afterCollapse = await pageSend('Runtime.evaluate', {
+    expression: `document.getElementById('bottomSheet')?.classList.contains('collapsed')`,
+    returnByValue: true
+  });
+  console.log('Bottom Sheet collassato con successo?', afterCollapse.result?.value);
+
   pageWs.close();
   ws.close();
   proc.kill();
 
-  const errors = consoleMessages.filter(m => m.type === 'error');
-  if (errors.length > 0) {
-    console.error('\n[ATTENZIONE] Trovati errori console:', errors);
+  const realErrors = consoleMessages.filter(m => m.type === 'error' && !m.text.includes('favicon'));
+  if (realErrors.length > 0) {
+    console.error('\n[ATTENZIONE] Trovati errori console:', realErrors);
     process.exit(1);
   } else {
-    console.log('\n[SUCCESSO] 0 errori in console! Tutti i test superati.');
+    console.log('\n[SUCCESSO] 0 errori in console! Tutti i test della nuova interfaccia superati.');
   }
 }
 

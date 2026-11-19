@@ -2,12 +2,11 @@ const express = require('express');
 const cors = require('cors');
 const path = require('path');
 const fs = require('fs');
-const { getLiveFeed, getStopArrivals, getPassengerArrivals, generateSimulatorBuses } = require('./services/liveTracker');
-const { extractFromGtfs, FALLBACK_LINEA6 } = require('./scripts/extract-linea6');
+const { getRealLiveBuses, getPassengerArrivals, getRomeTimeParts } = require('./services/liveTracker');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
-const CACHE_INTERVAL_SEC = 30;
+const CACHE_INTERVAL_SEC = 20;
 const CACHE_INTERVAL_MS = CACHE_INTERVAL_SEC * 1000;
 const DATA_FILE = path.join(process.cwd(), 'data', 'linea6.json');
 const PUBLIC_DIR = path.join(process.cwd(), 'public');
@@ -21,7 +20,7 @@ if (fs.existsSync(PUBLIC_DIR)) {
   app.use(express.static(PUBLIC_DIR));
 }
 
-// Logger sintetico delle richieste
+// Logger sintetico delle richieste API
 app.use((req, res, next) => {
   const start = Date.now();
   res.on('finish', () => {
@@ -33,56 +32,55 @@ app.use((req, res, next) => {
   next();
 });
 
-// Cache in memoria con TTL 30 secondi
+// Cache in memoria posizioni bus live (TTL 20 secondi)
 let liveCache = {
   updated_at: null,
   last_updated_ms: 0,
-  source: 'initializing',
+  source: 'start_infobus_live',
   buses: []
 };
 
 /**
- * Carica i dati statici da data/linea6.json.
- * Se il file manca, lo genera automaticamente con il modulo di estrazione.
+ * Carica i dati statici ufficiali da data/linea6.json.
  */
 function getStaticData() {
   try {
     if (!fs.existsSync(DATA_FILE)) {
-      console.log('data/linea6.json non trovato: estrazione automatica...');
-      return extractFromGtfs();
+      throw new Error(`File ${DATA_FILE} mancante. Esegui 'node scripts/build-real-stops.js' prima.`);
     }
     const content = fs.readFileSync(DATA_FILE, 'utf-8');
     return JSON.parse(content);
   } catch (err) {
     console.error('Errore durante la lettura di data/linea6.json:', err.message);
-    return FALLBACK_LINEA6;
+    return { error: err.message, stops: [] };
   }
 }
 
 /**
- * Aggiorna la cache live chiamando il motore di live tracking.
+ * Aggiorna la cache live leggendo i bus reali da Start Romagna.
+ * ZERO SIMULATORI: se non ci sono corse attive, buses = [].
  */
 async function refreshLiveCache() {
   try {
     const staticData = getStaticData();
-    const feed = await getLiveFeed(staticData);
+    const buses = await getRealLiveBuses(staticData);
 
     liveCache = {
       updated_at: new Date().toISOString(),
       last_updated_ms: Date.now(),
-      source: feed.source,
-      buses: feed.buses
+      source: 'start_infobus_live',
+      buses: buses || []
     };
 
     console.log(
-      `[Cache] Aggiornata: ${liveCache.updated_at} | Fonte: ${liveCache.source} | Autobus attivi: ${liveCache.buses.length}`
+      `[Cache Start Romagna] Aggiornata: ${liveCache.updated_at} | Autobus reali in linea: ${liveCache.buses.length}`
     );
   } catch (err) {
-    console.error('[Cache] Errore aggiornamento live tracking:', err.message);
+    console.error('[Cache Start Romagna] Errore aggiornamento live:', err.message);
   }
 }
 
-// Endpoint 1: Dati statici linea 6 (fermate e tracciato polilinea)
+// Endpoint 1: Dati statici ufficiali linea 6 (fermate reali per direzione 0 e 1)
 app.get('/api/linea6/static', (req, res) => {
   try {
     const staticData = getStaticData();
@@ -94,51 +92,31 @@ app.get('/api/linea6/static', (req, res) => {
   }
 });
 
-// Endpoint 2: Posizioni realtime autobus (compatibile sia con Serverless sia con daemon locale)
+// Endpoint 2: Posizioni realtime 100% REALI degli autobus (Start Romagna InfoBus)
 app.get('/api/linea6/live', async (req, res) => {
   const now = Date.now();
-  // Se la cache in memoria è vuota o ha più di 15 secondi (tipico in Vercel Serverless), aggiorna prima di rispondere
-  if (!liveCache.last_updated_ms || (now - liveCache.last_updated_ms > 15000) || !liveCache.buses || liveCache.buses.length === 0) {
+  // Se la cache ha più di 15 secondi (o vuota all'avvio su Vercel Serverless), aggiorna subito
+  if (!liveCache.last_updated_ms || (now - liveCache.last_updated_ms > 15000)) {
     await refreshLiveCache();
   }
 
   const elapsedSec = liveCache.last_updated_ms
     ? Math.floor((Date.now() - liveCache.last_updated_ms) / 1000)
     : 0;
-
-  const nextUpdateInSec = Math.max(0, 10 - elapsedSec);
+  const nextUpdateInSec = Math.max(0, CACHE_INTERVAL_SEC - elapsedSec);
 
   res.setHeader('Content-Type', 'application/json; charset=utf-8');
   res.setHeader('Cache-Control', 'public, s-maxage=10, stale-while-revalidate=20');
   res.status(200).json({
     updated_at: liveCache.updated_at,
     next_update_in_sec: nextUpdateInSec,
-    source: liveCache.source,
+    source: 'start_infobus_live',
+    buses_count: liveCache.buses.length,
     buses: liveCache.buses
   });
 });
 
-// Endpoint 3: Health check del servizio e diagnostica cache
-app.get('/api/health', (req, res) => {
-  const uptimeSec = Math.floor(process.uptime());
-  const cacheAgeSec = liveCache.last_updated_ms
-    ? Math.floor((Date.now() - liveCache.last_updated_ms) / 1000)
-    : null;
-
-  res.setHeader('Content-Type', 'application/json; charset=utf-8');
-  res.status(200).json({
-    status: 'ok',
-    service: 'cesena-linea6-live',
-    uptime_sec: uptimeSec,
-    cache_age_sec: cacheAgeSec,
-    cache_ttl_sec: CACHE_INTERVAL_SEC,
-    cache_source: liveCache.source,
-    buses_count: liveCache.buses.length,
-    timestamp: new Date().toISOString()
-  });
-});
-
-// Endpoint 4: Arrivi passeggero e calcolo catchability ("Riuscirò a prenderlo?")
+// Endpoint 3: Arrivi in tempo reale alla fermata richiesta (con calcolo cammino)
 app.get('/api/linea6/arrivals', async (req, res) => {
   try {
     const stopId = req.query.stop_id;
@@ -151,19 +129,9 @@ app.get('/api/linea6/arrivals', async (req, res) => {
       return res.status(400).json({ error: 'Parametro stop_id mancante' });
     }
 
-    // In ambiente Serverless aggiorna se cache vuota o > 15s
-    if (!liveCache.last_updated_ms || (Date.now() - liveCache.last_updated_ms > 15000) || !liveCache.buses || liveCache.buses.length === 0) {
-      await refreshLiveCache();
-    }
-
     const staticData = getStaticData();
-    const liveBuses = (liveCache && liveCache.buses && liveCache.buses.length > 0)
-      ? liveCache.buses
-      : generateSimulatorBuses(staticData);
-
-    const data = getPassengerArrivals({
+    const data = await getPassengerArrivals({
       staticData,
-      liveBuses,
       stopId,
       directionId,
       userLat,
@@ -176,65 +144,47 @@ app.get('/api/linea6/arrivals', async (req, res) => {
     }
 
     res.setHeader('Content-Type', 'application/json; charset=utf-8');
+    res.setHeader('Cache-Control', 'public, s-maxage=10, stale-while-revalidate=20');
     res.status(200).json({
-      updated_at: liveCache.updated_at || new Date().toISOString(),
-      source: liveCache.source,
+      updated_at: new Date().toISOString(),
+      source: 'start_infobus_live',
       ...data
     });
   } catch (err) {
-    console.error('Errore calcolo arrivi passeggero:', err);
-    res.status(500).json({ error: 'Errore nel calcolo arrivi passeggero', message: err.message });
-  }
-});
-
-// Alias e compatibilità retroattiva per /api/linea6/arrivals/:stopId
-app.get('/api/linea6/arrivals/:stopId', async (req, res) => {
-  try {
-    const { stopId } = req.params;
-    const directionId = req.query.direction;
-    const userLat = req.query.user_lat;
-    const userLon = req.query.user_lon;
-    const walkingMinutesParam = req.query.walking_minutes;
-
-    if (!liveCache.last_updated_ms || (Date.now() - liveCache.last_updated_ms > 15000) || !liveCache.buses || liveCache.buses.length === 0) {
-      await refreshLiveCache();
-    }
-
-    const staticData = getStaticData();
-    const liveBuses = (liveCache && liveCache.buses && liveCache.buses.length > 0)
-      ? liveCache.buses
-      : generateSimulatorBuses(staticData);
-
-    const passengerData = getPassengerArrivals({
-      staticData,
-      liveBuses,
-      stopId,
-      directionId,
-      userLat,
-      userLon,
-      walkingMinutesParam
-    });
-
-    if (!passengerData) {
-      return res.status(404).json({ error: 'Fermata non trovata', stop_id: stopId });
-    }
-
-    const legacyArrivals = getStopArrivals(staticData, liveBuses, stopId);
-
-    res.setHeader('Content-Type', 'application/json; charset=utf-8');
-    res.status(200).json({
-      updated_at: liveCache.updated_at || new Date().toISOString(),
-      source: liveCache.source,
-      arrivals: legacyArrivals?.arrivals || [],
-      ...passengerData
-    });
-  } catch (err) {
     console.error('Errore calcolo arrivi fermata:', err);
-    res.status(500).json({ error: 'Errore nel calcolo arrivi', message: err.message });
+    res.status(500).json({ error: 'Errore nel calcolo arrivi fermata', message: err.message });
   }
 });
 
-// Gestione rotte non trovate
+// Alias retrocompatibile per /api/linea6/arrivals/:stopId
+app.get('/api/linea6/arrivals/:stopId', async (req, res) => {
+  req.query.stop_id = req.params.stopId;
+  return app._router.handle(req, res);
+});
+
+// Endpoint 4: Health check del servizio
+app.get('/api/health', (req, res) => {
+  const uptimeSec = Math.floor(process.uptime());
+  const cacheAgeSec = liveCache.last_updated_ms
+    ? Math.floor((Date.now() - liveCache.last_updated_ms) / 1000)
+    : null;
+  const nowRome = getRomeTimeParts();
+
+  res.setHeader('Content-Type', 'application/json; charset=utf-8');
+  res.status(200).json({
+    status: 'ok',
+    service: 'cesena-linea6-live',
+    rome_time: nowRome.timeString,
+    uptime_sec: uptimeSec,
+    cache_age_sec: cacheAgeSec,
+    cache_ttl_sec: CACHE_INTERVAL_SEC,
+    source: 'start_infobus_live',
+    buses_count: liveCache.buses.length,
+    timestamp: new Date().toISOString()
+  });
+});
+
+// Gestione rotte API non trovate
 app.use('/api', (req, res) => {
   res.status(404).json({ error: 'Endpoint API non trovato', path: req.path });
 });
@@ -245,16 +195,12 @@ app.use((err, req, res, next) => {
   res.status(500).json({ error: 'Errore interno del server', message: err.message });
 });
 
-// Avvio server e schedulazione cache a 30 secondi
 let serverInstance;
 
 async function startServer() {
-  console.log('Avvio del server cesena-linea6-live in corso...');
-  
-  // Primo caricamento immediato della cache prima di accettare traffico
+  console.log('Avvio del server cesena-linea6-live (100% Real Start Romagna)...');
   await refreshLiveCache();
 
-  // Timer di background a 30 secondi
   const timerId = setInterval(refreshLiveCache, CACHE_INTERVAL_MS);
   timerId.unref();
 
@@ -263,8 +209,9 @@ async function startServer() {
     console.log(` cesena-linea6-live Backend attivo sulla porta ${PORT}`);
     console.log(` - Static Data:  http://localhost:${PORT}/api/linea6/static`);
     console.log(` - Live Buses:   http://localhost:${PORT}/api/linea6/live`);
+    console.log(` - Arrivals:     http://localhost:${PORT}/api/linea6/arrivals?stop_id=6721`);
     console.log(` - Health Check: http://localhost:${PORT}/api/health`);
-    console.log(` - Cache TTL:    ${CACHE_INTERVAL_SEC} secondi`);
+    console.log(` - Fonte dati:   Start Romagna InfoBus (ZERO SIMULATORI)`);
     console.log(`====================================================`);
   });
 
@@ -272,13 +219,12 @@ async function startServer() {
 }
 
 if (require.main === module) {
-  startServer().catch((err) => {
+  startServer().catch(err => {
     console.error('Errore fatale avvio server:', err);
     process.exit(1);
   });
 }
 
-// Esporta l'applicazione per Vercel Serverless
 app.startServer = startServer;
 app.refreshLiveCache = refreshLiveCache;
 module.exports = app;

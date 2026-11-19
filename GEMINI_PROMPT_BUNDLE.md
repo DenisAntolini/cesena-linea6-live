@@ -97,12 +97,11 @@ const express = require('express');
 const cors = require('cors');
 const path = require('path');
 const fs = require('fs');
-const { getLiveFeed, getStopArrivals, getPassengerArrivals, generateSimulatorBuses } = require('./services/liveTracker');
-const { extractFromGtfs, FALLBACK_LINEA6 } = require('./scripts/extract-linea6');
+const { getRealLiveBuses, getPassengerArrivals, getRomeTimeParts } = require('./services/liveTracker');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
-const CACHE_INTERVAL_SEC = 30;
+const CACHE_INTERVAL_SEC = 20;
 const CACHE_INTERVAL_MS = CACHE_INTERVAL_SEC * 1000;
 const DATA_FILE = path.join(process.cwd(), 'data', 'linea6.json');
 const PUBLIC_DIR = path.join(process.cwd(), 'public');
@@ -116,7 +115,7 @@ if (fs.existsSync(PUBLIC_DIR)) {
   app.use(express.static(PUBLIC_DIR));
 }
 
-// Logger sintetico delle richieste
+// Logger sintetico delle richieste API
 app.use((req, res, next) => {
   const start = Date.now();
   res.on('finish', () => {
@@ -128,56 +127,55 @@ app.use((req, res, next) => {
   next();
 });
 
-// Cache in memoria con TTL 30 secondi
+// Cache in memoria posizioni bus live (TTL 20 secondi)
 let liveCache = {
   updated_at: null,
   last_updated_ms: 0,
-  source: 'initializing',
+  source: 'start_infobus_live',
   buses: []
 };
 
 /**
- * Carica i dati statici da data/linea6.json.
- * Se il file manca, lo genera automaticamente con il modulo di estrazione.
+ * Carica i dati statici ufficiali da data/linea6.json.
  */
 function getStaticData() {
   try {
     if (!fs.existsSync(DATA_FILE)) {
-      console.log('data/linea6.json non trovato: estrazione automatica...');
-      return extractFromGtfs();
+      throw new Error(`File ${DATA_FILE} mancante. Esegui 'node scripts/build-real-stops.js' prima.`);
     }
     const content = fs.readFileSync(DATA_FILE, 'utf-8');
     return JSON.parse(content);
   } catch (err) {
     console.error('Errore durante la lettura di data/linea6.json:', err.message);
-    return FALLBACK_LINEA6;
+    return { error: err.message, stops: [] };
   }
 }
 
 /**
- * Aggiorna la cache live chiamando il motore di live tracking.
+ * Aggiorna la cache live leggendo i bus reali da Start Romagna.
+ * ZERO SIMULATORI: se non ci sono corse attive, buses = [].
  */
 async function refreshLiveCache() {
   try {
     const staticData = getStaticData();
-    const feed = await getLiveFeed(staticData);
+    const buses = await getRealLiveBuses(staticData);
 
     liveCache = {
       updated_at: new Date().toISOString(),
       last_updated_ms: Date.now(),
-      source: feed.source,
-      buses: feed.buses
+      source: 'start_infobus_live',
+      buses: buses || []
     };
 
     console.log(
-      `[Cache] Aggiornata: ${liveCache.updated_at} | Fonte: ${liveCache.source} | Autobus attivi: ${liveCache.buses.length}`
+      `[Cache Start Romagna] Aggiornata: ${liveCache.updated_at} | Autobus reali in linea: ${liveCache.buses.length}`
     );
   } catch (err) {
-    console.error('[Cache] Errore aggiornamento live tracking:', err.message);
+    console.error('[Cache Start Romagna] Errore aggiornamento live:', err.message);
   }
 }
 
-// Endpoint 1: Dati statici linea 6 (fermate e tracciato polilinea)
+// Endpoint 1: Dati statici ufficiali linea 6 (fermate reali per direzione 0 e 1)
 app.get('/api/linea6/static', (req, res) => {
   try {
     const staticData = getStaticData();
@@ -189,51 +187,31 @@ app.get('/api/linea6/static', (req, res) => {
   }
 });
 
-// Endpoint 2: Posizioni realtime autobus (compatibile sia con Serverless sia con daemon locale)
+// Endpoint 2: Posizioni realtime 100% REALI degli autobus (Start Romagna InfoBus)
 app.get('/api/linea6/live', async (req, res) => {
   const now = Date.now();
-  // Se la cache in memoria è vuota o ha più di 15 secondi (tipico in Vercel Serverless), aggiorna prima di rispondere
-  if (!liveCache.last_updated_ms || (now - liveCache.last_updated_ms > 15000) || !liveCache.buses || liveCache.buses.length === 0) {
+  // Se la cache ha più di 15 secondi (o vuota all'avvio su Vercel Serverless), aggiorna subito
+  if (!liveCache.last_updated_ms || (now - liveCache.last_updated_ms > 15000)) {
     await refreshLiveCache();
   }
 
   const elapsedSec = liveCache.last_updated_ms
     ? Math.floor((Date.now() - liveCache.last_updated_ms) / 1000)
     : 0;
-
-  const nextUpdateInSec = Math.max(0, 10 - elapsedSec);
+  const nextUpdateInSec = Math.max(0, CACHE_INTERVAL_SEC - elapsedSec);
 
   res.setHeader('Content-Type', 'application/json; charset=utf-8');
   res.setHeader('Cache-Control', 'public, s-maxage=10, stale-while-revalidate=20');
   res.status(200).json({
     updated_at: liveCache.updated_at,
     next_update_in_sec: nextUpdateInSec,
-    source: liveCache.source,
+    source: 'start_infobus_live',
+    buses_count: liveCache.buses.length,
     buses: liveCache.buses
   });
 });
 
-// Endpoint 3: Health check del servizio e diagnostica cache
-app.get('/api/health', (req, res) => {
-  const uptimeSec = Math.floor(process.uptime());
-  const cacheAgeSec = liveCache.last_updated_ms
-    ? Math.floor((Date.now() - liveCache.last_updated_ms) / 1000)
-    : null;
-
-  res.setHeader('Content-Type', 'application/json; charset=utf-8');
-  res.status(200).json({
-    status: 'ok',
-    service: 'cesena-linea6-live',
-    uptime_sec: uptimeSec,
-    cache_age_sec: cacheAgeSec,
-    cache_ttl_sec: CACHE_INTERVAL_SEC,
-    cache_source: liveCache.source,
-    buses_count: liveCache.buses.length,
-    timestamp: new Date().toISOString()
-  });
-});
-
-// Endpoint 4: Arrivi passeggero e calcolo catchability ("Riuscirò a prenderlo?")
+// Endpoint 3: Arrivi in tempo reale alla fermata richiesta (con calcolo cammino)
 app.get('/api/linea6/arrivals', async (req, res) => {
   try {
     const stopId = req.query.stop_id;
@@ -246,19 +224,9 @@ app.get('/api/linea6/arrivals', async (req, res) => {
       return res.status(400).json({ error: 'Parametro stop_id mancante' });
     }
 
-    // In ambiente Serverless aggiorna se cache vuota o > 15s
-    if (!liveCache.last_updated_ms || (Date.now() - liveCache.last_updated_ms > 15000) || !liveCache.buses || liveCache.buses.length === 0) {
-      await refreshLiveCache();
-    }
-
     const staticData = getStaticData();
-    const liveBuses = (liveCache && liveCache.buses && liveCache.buses.length > 0)
-      ? liveCache.buses
-      : generateSimulatorBuses(staticData);
-
-    const data = getPassengerArrivals({
+    const data = await getPassengerArrivals({
       staticData,
-      liveBuses,
       stopId,
       directionId,
       userLat,
@@ -271,65 +239,47 @@ app.get('/api/linea6/arrivals', async (req, res) => {
     }
 
     res.setHeader('Content-Type', 'application/json; charset=utf-8');
+    res.setHeader('Cache-Control', 'public, s-maxage=10, stale-while-revalidate=20');
     res.status(200).json({
-      updated_at: liveCache.updated_at || new Date().toISOString(),
-      source: liveCache.source,
+      updated_at: new Date().toISOString(),
+      source: 'start_infobus_live',
       ...data
     });
   } catch (err) {
-    console.error('Errore calcolo arrivi passeggero:', err);
-    res.status(500).json({ error: 'Errore nel calcolo arrivi passeggero', message: err.message });
-  }
-});
-
-// Alias e compatibilità retroattiva per /api/linea6/arrivals/:stopId
-app.get('/api/linea6/arrivals/:stopId', async (req, res) => {
-  try {
-    const { stopId } = req.params;
-    const directionId = req.query.direction;
-    const userLat = req.query.user_lat;
-    const userLon = req.query.user_lon;
-    const walkingMinutesParam = req.query.walking_minutes;
-
-    if (!liveCache.last_updated_ms || (Date.now() - liveCache.last_updated_ms > 15000) || !liveCache.buses || liveCache.buses.length === 0) {
-      await refreshLiveCache();
-    }
-
-    const staticData = getStaticData();
-    const liveBuses = (liveCache && liveCache.buses && liveCache.buses.length > 0)
-      ? liveCache.buses
-      : generateSimulatorBuses(staticData);
-
-    const passengerData = getPassengerArrivals({
-      staticData,
-      liveBuses,
-      stopId,
-      directionId,
-      userLat,
-      userLon,
-      walkingMinutesParam
-    });
-
-    if (!passengerData) {
-      return res.status(404).json({ error: 'Fermata non trovata', stop_id: stopId });
-    }
-
-    const legacyArrivals = getStopArrivals(staticData, liveBuses, stopId);
-
-    res.setHeader('Content-Type', 'application/json; charset=utf-8');
-    res.status(200).json({
-      updated_at: liveCache.updated_at || new Date().toISOString(),
-      source: liveCache.source,
-      arrivals: legacyArrivals?.arrivals || [],
-      ...passengerData
-    });
-  } catch (err) {
     console.error('Errore calcolo arrivi fermata:', err);
-    res.status(500).json({ error: 'Errore nel calcolo arrivi', message: err.message });
+    res.status(500).json({ error: 'Errore nel calcolo arrivi fermata', message: err.message });
   }
 });
 
-// Gestione rotte non trovate
+// Alias retrocompatibile per /api/linea6/arrivals/:stopId
+app.get('/api/linea6/arrivals/:stopId', async (req, res) => {
+  req.query.stop_id = req.params.stopId;
+  return app._router.handle(req, res);
+});
+
+// Endpoint 4: Health check del servizio
+app.get('/api/health', (req, res) => {
+  const uptimeSec = Math.floor(process.uptime());
+  const cacheAgeSec = liveCache.last_updated_ms
+    ? Math.floor((Date.now() - liveCache.last_updated_ms) / 1000)
+    : null;
+  const nowRome = getRomeTimeParts();
+
+  res.setHeader('Content-Type', 'application/json; charset=utf-8');
+  res.status(200).json({
+    status: 'ok',
+    service: 'cesena-linea6-live',
+    rome_time: nowRome.timeString,
+    uptime_sec: uptimeSec,
+    cache_age_sec: cacheAgeSec,
+    cache_ttl_sec: CACHE_INTERVAL_SEC,
+    source: 'start_infobus_live',
+    buses_count: liveCache.buses.length,
+    timestamp: new Date().toISOString()
+  });
+});
+
+// Gestione rotte API non trovate
 app.use('/api', (req, res) => {
   res.status(404).json({ error: 'Endpoint API non trovato', path: req.path });
 });
@@ -340,16 +290,12 @@ app.use((err, req, res, next) => {
   res.status(500).json({ error: 'Errore interno del server', message: err.message });
 });
 
-// Avvio server e schedulazione cache a 30 secondi
 let serverInstance;
 
 async function startServer() {
-  console.log('Avvio del server cesena-linea6-live in corso...');
-  
-  // Primo caricamento immediato della cache prima di accettare traffico
+  console.log('Avvio del server cesena-linea6-live (100% Real Start Romagna)...');
   await refreshLiveCache();
 
-  // Timer di background a 30 secondi
   const timerId = setInterval(refreshLiveCache, CACHE_INTERVAL_MS);
   timerId.unref();
 
@@ -358,8 +304,9 @@ async function startServer() {
     console.log(` cesena-linea6-live Backend attivo sulla porta ${PORT}`);
     console.log(` - Static Data:  http://localhost:${PORT}/api/linea6/static`);
     console.log(` - Live Buses:   http://localhost:${PORT}/api/linea6/live`);
+    console.log(` - Arrivals:     http://localhost:${PORT}/api/linea6/arrivals?stop_id=6721`);
     console.log(` - Health Check: http://localhost:${PORT}/api/health`);
-    console.log(` - Cache TTL:    ${CACHE_INTERVAL_SEC} secondi`);
+    console.log(` - Fonte dati:   Start Romagna InfoBus (ZERO SIMULATORI)`);
     console.log(`====================================================`);
   });
 
@@ -367,13 +314,12 @@ async function startServer() {
 }
 
 if (require.main === module) {
-  startServer().catch((err) => {
+  startServer().catch(err => {
     console.error('Errore fatale avvio server:', err);
     process.exit(1);
   });
 }
 
-// Esporta l'applicazione per Vercel Serverless
 app.startServer = startServer;
 app.refreshLiveCache = refreshLiveCache;
 module.exports = app;
@@ -423,29 +369,81 @@ module.exports = app;
   "license": "ISC",
   "type": "commonjs",
   "dependencies": {
-    "@ngrok/ngrok": "^1.7.0",
-    "cloudflared": "^0.7.3",
+    "cheerio": "^1.2.0",
     "cors": "^2.8.6",
     "csv-parse": "^7.0.3",
-    "express": "^5.3.0",
-    "localtunnel": "^2.0.2",
-    "tunnelmole": "^2.4.0"
+    "express": "^5.3.0"
+  },
+  "devDependencies": {
+    "ws": "^8.23.0"
   }
 }
 ```
 
 ### 6. `services/liveTracker.js`
 ```javascript
+/**
+ * services/liveTracker.js
+ * Motore di tracciamento REALTIME basato al 100% su InfoBus Start Romagna.
+ * ZERO SIMULATORI - Dati reali diretti.
+ */
+process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
+const cheerio = require('cheerio');
 const path = require('path');
 const fs = require('fs');
 
+// Cache in memoria con TTL
+const STOP_BOARD_CACHE_TTL_MS = 20 * 1000; // 20 secondi per le paline
+const PERCORSO_CACHE_TTL_MS = 10 * 60 * 1000; // 10 minuti per i percorsi dei trip
+const stopBoardCache = new Map();
+const percorsoCache = new Map();
+
 /**
- * Calcola l'angolo di direzione (bearing / azimut) in gradi tra due coordinate GPS.
- * 0° = Nord, 90° = Est, 180° = Sud, 270° = Ovest.
+ * Calcola ora, minuti e secondi correnti nel fuso orario obbligatorio Europe/Rome.
+ * Risolve la discrepanza UTC di Vercel Serverless.
+ */
+function getRomeTimeParts(date = new Date()) {
+  const formatter = new Intl.DateTimeFormat('en-GB', {
+    timeZone: 'Europe/Rome',
+    hour12: false,
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit'
+  });
+  const parts = formatter.formatToParts(date);
+  const hour = parseInt(parts.find(p => p.type === 'hour').value, 10);
+  const minute = parseInt(parts.find(p => p.type === 'minute').value, 10);
+  const second = parseInt(parts.find(p => p.type === 'second').value, 10);
+  const totalMinutes = hour * 60 + minute;
+  const totalSeconds = totalMinutes * 60 + second;
+  const timeString = `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`;
+  return { hour, minute, second, totalMinutes, totalSeconds, timeString };
+}
+
+/**
+ * Converte "HH:MM" in minuti totali dall'inizio della giornata.
+ */
+function timeStrToMinutes(str) {
+  if (!str || typeof str !== 'string' || !str.includes(':')) return null;
+  const [h, m] = str.split(':').map(x => parseInt(x, 10));
+  if (isNaN(h) || isNaN(m)) return null;
+  return h * 60 + m;
+}
+
+/**
+ * Converte "HH:MM" in secondi totali dall'inizio della giornata.
+ */
+function timeStrToSeconds(str) {
+  const min = timeStrToMinutes(str);
+  return min !== null ? min * 60 : null;
+}
+
+/**
+ * Calcola l'angolo di direzione (bearing / azimut) in gradi.
  */
 function calculateBearing(lat1, lon1, lat2, lon2) {
-  const toRad = (deg) => (deg * Math.PI) / 180;
-  const toDeg = (rad) => (rad * 180) / Math.PI;
+  const toRad = deg => (deg * Math.PI) / 180;
+  const toDeg = rad => (rad * 180) / Math.PI;
 
   const phi1 = toRad(lat1);
   const phi2 = toRad(lat2);
@@ -455,863 +453,441 @@ function calculateBearing(lat1, lon1, lat2, lon2) {
   const x = Math.cos(phi1) * Math.sin(phi2) - Math.sin(phi1) * Math.cos(phi2) * Math.cos(deltaLambda);
 
   const theta = Math.atan2(y, x);
-  const bearing = (toDeg(theta) + 360) % 360;
-  return Math.round(bearing * 10) / 10;
+  return Math.round(((toDeg(theta) + 360) % 360) * 10) / 10;
 }
 
 /**
- * Calcola la distanza tra due punti in chilometri (formula di Haversine).
+ * Distanza geodetica in metri tra due coordinate (formula Haversine).
  */
-function haversineDistanceKm(lat1, lon1, lat2, lon2) {
-  const R = 6371;
-  const toRad = (deg) => (deg * Math.PI) / 180;
+function haversineMeters(lat1, lon1, lat2, lon2) {
+  const R = 6371000;
+  const toRad = deg => (deg * Math.PI) / 180;
   const dLat = toRad(lat2 - lat1);
   const dLon = toRad(lon2 - lon1);
   const a =
     Math.sin(dLat / 2) * Math.sin(dLat / 2) +
     Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon / 2) * Math.sin(dLon / 2);
   const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-  return R * c;
+  return Math.round(R * c);
 }
 
 /**
- * Interpola posizione e direzione lungo una polilinea stradale (segment_path).
- * In questo modo l'autobus segue fedelmente ogni curva, ponte e rotonda di Cesena.
+ * Parsing robusto dello stato live restituito da Start Romagna.
+ * Gestisce: "+ 2 minuti", "- 1 minuti", "11:45", "In arrivo", "SOPP", ecc.
  */
-function interpolateAlongPath(points, progress) {
-  if (!points || points.length === 0) return null;
-  if (points.length === 1 || progress <= 0) {
-    const bearing = points.length > 1
-      ? calculateBearing(points[0][0], points[0][1], points[1][0], points[1][1])
-      : 0;
-    return { lat: points[0][0], lon: points[0][1], bearing };
-  }
-  if (progress >= 1) {
-    const last = points[points.length - 1];
-    const prev = points[points.length - 2] || points[0];
-    const bearing = calculateBearing(prev[0], prev[1], last[0], last[1]);
-    return { lat: last[0], lon: last[1], bearing };
-  }
+function parseStartRomagnaStatus(statusText, scheduledTimeStr, nowRome) {
+  const schedMinutes = timeStrToMinutes(scheduledTimeStr);
+  let liveMinutes = schedMinutes;
+  let delayMinutes = 0;
+  let statusClass = 'on-time';
+  let isCancelled = false;
+  const cleanText = (statusText || '').trim();
 
-  // Calcolo distanze cumulative tra tutti i punti della strada
-  const dists = [];
-  let totalDist = 0;
-  for (let i = 0; i < points.length - 1; i++) {
-    const d = haversineDistanceKm(points[i][0], points[i][1], points[i + 1][0], points[i + 1][1]);
-    dists.push(d);
-    totalDist += d;
+  if (/sopp/i.test(cleanText)) {
+    isCancelled = true;
+    statusClass = 'sopp';
+    return {
+      isCancelled,
+      statusClass,
+      liveTimeStr: 'SOPP',
+      liveMinutes: null,
+      delayMinutes: 0,
+      etaMinutes: null,
+      displayText: 'CORSA SOPPRESSA'
+    };
   }
 
-  if (totalDist === 0) {
-    return { lat: points[0][0], lon: points[0][1], bearing: 0 };
-  }
-
-  const targetDist = progress * totalDist;
-  let accumulated = 0;
-
-  for (let i = 0; i < dists.length; i++) {
-    if (accumulated + dists[i] >= targetDist || i === dists.length - 1) {
-      const segProg = dists[i] > 0 ? (targetDist - accumulated) / dists[i] : 0;
-      const clampedProg = Math.min(Math.max(segProg, 0), 1);
-      const p1 = points[i];
-      const p2 = points[i + 1];
-
-      const lat = +(p1[0] + (p2[0] - p1[0]) * clampedProg).toFixed(6);
-      const lon = +(p1[1] + (p2[1] - p1[1]) * clampedProg).toFixed(6);
-      const bearing = calculateBearing(p1[0], p1[1], p2[0], p2[1]);
-
-      return { lat, lon, bearing };
+  const delayMatch = cleanText.match(/([+-]?\s*\d+)\s*min/i);
+  if (delayMatch) {
+    delayMinutes = parseInt(delayMatch[1].replace(/\s+/g, ''), 10) || 0;
+    if (schedMinutes !== null) {
+      liveMinutes = schedMinutes + delayMinutes;
     }
-    accumulated += dists[i];
-  }
-
-  const last = points[points.length - 1];
-  return { lat: last[0], lon: last[1], bearing: 0 };
-}
-
-/**
- * Calcola la posizione simulata di un autobus lungo una sequenza di fermate
- * sincronizzata con l'orologio di sistema (Date.now()).
- */
-function simulateBusPosition({ busId, busLabel, routeData, directionId, directionName, timeOffsetSec = 0 }) {
-  const stops = (routeData && routeData.stops && routeData.stops.length > 0)
-    ? routeData.stops
-    : [];
-
-  if (stops.length < 2) {
-    return null;
-  }
-
-  const SEC_PER_SEGMENT = 90; // 1.5 minuti di percorrenza per tratta
-  const DWELL_SEC = 15;        // 15 secondi di fermata / salita passeggeri
-  const TERMINUS_DWELL_SEC = 120; // 2 minuti di sosta al capolinea
-
-  const numSegments = stops.length - 1;
-  const transitTotalSec = numSegments * SEC_PER_SEGMENT;
-  const totalCycleSec = transitTotalSec + TERMINUS_DWELL_SEC;
-
-  // Calcolo tempo continuo nel ciclo corrente
-  const nowMs = Date.now();
-  const nowSec = Math.floor(nowMs / 1000);
-  const cycleClock = ((nowSec + timeOffsetSec) % totalCycleSec + totalCycleSec) % totalCycleSec;
-
-  let currentStop;
-  let nextStop;
-  let progress = 0;
-  let lat = stops[0].lat;
-  let lon = stops[0].lon;
-  let bearing = 0;
-  let speedKmh = 0;
-  let status = "IN_TRANSIT_TO";
-
-  if (cycleClock >= transitTotalSec) {
-    // Il bus è in sosta al capolinea di arrivo
-    const lastIdx = stops.length - 1;
-    currentStop = stops[lastIdx];
-    nextStop = null;
-    lat = currentStop.lat;
-    lon = currentStop.lon;
-    progress = 1.0;
-    speedKmh = 0.0;
-    status = "AT_TERMINUS";
-    const prevStop = stops[lastIdx - 1];
-    bearing = calculateBearing(prevStop.lat, prevStop.lon, currentStop.lat, currentStop.lon);
-  } else {
-    // Il bus è su un segmento tra stop A e stop B
-    const segmentIndex = Math.min(Math.floor(cycleClock / SEC_PER_SEGMENT), numSegments - 1);
-    const timeInSegment = cycleClock % SEC_PER_SEGMENT;
-    const stopA = stops[segmentIndex];
-    const stopB = stops[segmentIndex + 1];
-
-    currentStop = stopA;
-    nextStop = stopB;
-
-    if (timeInSegment < DWELL_SEC) {
-      // Fermo alla palina per discesa/salita passeggeri
-      progress = 0.0;
-      lat = stopA.lat;
-      lon = stopA.lon;
-      speedKmh = 0.0;
-      status = "STOPPED_AT";
-      bearing = calculateBearing(stopA.lat, stopA.lon, stopB.lat, stopB.lon);
-    } else {
-      // In movimento verso la fermata successiva lungo il tracciato stradale reale (segment_path)
-      const movingTime = timeInSegment - DWELL_SEC;
-      const movingWindow = SEC_PER_SEGMENT - DWELL_SEC;
-      const rawProgress = Math.min(Math.max(movingTime / movingWindow, 0), 1);
-      progress = Math.round(rawProgress * 100) / 100;
-
-      const pathPoints = (stopA.segment_coords && stopA.segment_coords.length > 1)
-        ? stopA.segment_coords
-        : (stopA.segment_path && stopA.segment_path.length > 1)
-          ? stopA.segment_path
-          : [[stopA.lat, stopA.lon], [stopB.lat, stopB.lon]];
-
-      const interpolated = interpolateAlongPath(pathPoints, rawProgress);
-      lat = interpolated.lat;
-      lon = interpolated.lon;
-      bearing = interpolated.bearing;
-
-      const baseSpeed = 24.0 + Math.sin(timeInSegment / 8) * 5.0;
-      speedKmh = Math.round(baseSpeed * 10) / 10;
-      status = "IN_TRANSIT_TO";
+    if (delayMinutes > 2) statusClass = 'delayed';
+    else if (delayMinutes < -1) statusClass = 'early';
+  } else if (/^\d{1,2}:\d{2}$/.test(cleanText)) {
+    const absMin = timeStrToMinutes(cleanText);
+    if (absMin !== null && schedMinutes !== null) {
+      liveMinutes = absMin;
+      delayMinutes = liveMinutes - schedMinutes;
     }
+    if (delayMinutes > 2) statusClass = 'delayed';
+  } else if (/arriv/i.test(cleanText)) {
+    liveMinutes = nowRome.totalMinutes;
+    delayMinutes = schedMinutes !== null ? liveMinutes - schedMinutes : 0;
+    statusClass = 'arriving';
   }
 
-  // Ritardo realistico calibrato sul tempo di sistema (+0..+3 min)
-  const delayMinutes = Math.max(0, Math.floor(1 + Math.sin((nowSec + timeOffsetSec) / 180) * 1.8));
+  const liveHour = liveMinutes !== null ? Math.floor(liveMinutes / 60) % 24 : 0;
+  const liveMinPart = liveMinutes !== null ? liveMinutes % 60 : 0;
+  const liveTimeStr = liveMinutes !== null
+    ? `${String(liveHour).padStart(2, '0')}:${String(liveMinPart).padStart(2, '0')}`
+    : scheduledTimeStr;
+
+  const etaMinutes = liveMinutes !== null ? liveMinutes - nowRome.totalMinutes : null;
 
   return {
-    id: busId,
-    vehicle_label: busLabel,
-    route_id: "CE_6",
-    route_short_name: "6",
-    direction_id: directionId,
-    direction_name: directionName,
-    destination: directionName,
-    lat,
-    lon,
-    bearing,
-    speed_kmh: speedKmh,
-    current_stop: {
-      stop_id: currentStop.stop_id,
-      stop_code: currentStop.stop_code,
-      stop_name: currentStop.stop_name,
-      sequence: currentStop.sequence,
-      lat: currentStop.lat,
-      lon: currentStop.lon
-    },
-    next_stop: nextStop ? {
-      stop_id: nextStop.stop_id,
-      stop_code: nextStop.stop_code,
-      stop_name: nextStop.stop_name,
-      sequence: nextStop.sequence,
-      lat: nextStop.lat,
-      lon: nextStop.lon
-    } : null,
-    progress,
-    delay_minutes: delayMinutes,
-    status,
-    timestamp: new Date().toISOString()
+    isCancelled,
+    statusClass,
+    liveTimeStr,
+    liveMinutes,
+    delayMinutes,
+    etaMinutes,
+    displayText: cleanText || liveTimeStr
   };
 }
 
 /**
- * Tenta il recupero posizioni realtime da InfoBus / Start Romagna.
- * Se l'endpoint non risponde entro 4 secondi o va in errore, solleva un'eccezione.
+ * Scarica la lavagna arrivi in tempo reale di una fermata da InfoBus Start Romagna.
  */
-async function fetchRealtimeInfoBus() {
-  const timeoutMs = 4000;
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
+async function fetchStopBoard(targetId, palina) {
+  const cacheKey = `${targetId}_${palina}`;
+  const cached = stopBoardCache.get(cacheKey);
+  const now = Date.now();
+  if (cached && now < cached.expiresAt) {
+    return cached.data;
+  }
+
+  const url = `https://infobus.startromagna.it/InfoFermata?param=${targetId}&param2=fc&palina=${palina}`;
+  const nowRome = getRomeTimeParts();
 
   try {
-    // Endpoint Start Romagna InfoBus / GTFS-RT proxy
-    const targetUrl = 'https://infobus.startromagna.it/api/linee/6/posizioni';
-    const response = await fetch(targetUrl, {
-      signal: controller.signal,
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 6000);
+
+    const res = await fetch(url, {
       headers: {
-        'Accept': 'application/json',
-        'User-Agent': 'CesenaLinea6Live/1.0'
-      }
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+      },
+      signal: controller.signal
     });
+    clearTimeout(timeoutId);
 
-    clearTimeout(timer);
-
-    if (!response.ok) {
-      throw new Error(`HTTP ${response.status} da InfoBus`);
+    if (!res.ok) {
+      throw new Error(`HTTP ${res.status} da InfoBus Start Romagna`);
     }
 
-    const data = await response.json();
-    if (!data || !Array.isArray(data.veicoli) || data.veicoli.length === 0) {
-      throw new Error('Nessun veicolo realtime attivo ricevuto dal servizio');
-    }
+    const html = await res.text();
+    const $ = cheerio.load(html);
+    const arrivals = [];
 
-    // Mappa formato InfoBus
-    return data.veicoli.map((v, i) => ({
-      id: v.id || `BUS-REAL-${i + 1}`,
-      vehicle_label: v.matricola || `Start Romagna ${v.id}`,
-      route_id: "CE_6",
-      route_short_name: "6",
-      direction_id: v.direzione === 1 ? 1 : 0,
-      direction_name: v.direzione === 1 ? "Rio Maggiore" : "Montefiore",
-      destination: v.destinazione || (v.direzione === 1 ? "Rio Maggiore" : "Montefiore"),
-      lat: parseFloat(v.lat),
-      lon: parseFloat(v.lon),
-      bearing: parseFloat(v.bearing || 0),
-      speed_kmh: parseFloat(v.velocita || 0),
-      current_stop: v.ultima_fermata ? { stop_name: v.ultima_fermata } : null,
-      next_stop: v.prossima_fermata ? { stop_name: v.prossima_fermata } : null,
-      progress: parseFloat(v.progress || 0),
-      delay_minutes: parseInt(v.ritardo_minuti || 0, 10),
-      status: v.in_fermata ? "STOPPED_AT" : "IN_TRANSIT_TO",
-      timestamp: new Date().toISOString()
-    }));
-  } catch (err) {
-    clearTimeout(timer);
-    throw err;
-  }
-}
+    $('.bus-card').each((_, el) => {
+      const headerText = $(el).find('.bus-header > span').clone().children().remove().end().text().trim();
+      const isLine6 = /linea\s*6\b|^\s*6[A-Z]?\b/i.test(headerText);
+      if (!isLine6) return;
 
-/**
- * Genera gli autobus tramite il Simulatore Realistico sincronizzato con Date.now().
- * Garantisce 4 autobus attivi (2 per direzione) così che ci sia sempre un veicolo
- * in avvicinamento in entrambi i sensi di marcia.
- */
-function generateSimulatorBuses(staticData) {
-  const dir0Data = staticData?.routes_by_direction?.["0"] || {
-    destination: "Montefiore",
-    stops: staticData?.stops || []
-  };
+      const scheduledTime = $(el).find('.bus-times span:first-child').text().trim();
+      const statusEl = $(el).find('.bus-status');
+      const statusText = statusEl.text().trim();
+      const destText = $(el).find('.bus-destination').text().trim();
+      const btn = $(el).find('.dettaglio-btn');
+      const tripId = btn.attr('data-trip') || null;
+      const vehicleId = btn.attr('data-vehicle') || null;
 
-  const dir1Data = staticData?.routes_by_direction?.["1"] || {
-    destination: "Rio Maggiore",
-    stops: [...(staticData?.stops || [])].reverse()
-  };
+      const destUpper = destText.toUpperCase();
+      const directionId = destUpper.includes('MONTEFIORE') ? '0' : (destUpper.includes('RIO MAGGIORE') ? '1' : null);
 
-  // Bus 1 (Dir 0 - Verso Montefiore)
-  const bus1 = simulateBusPosition({
-    busId: "CE-BUS-601",
-    busLabel: "Start Romagna 601",
-    routeData: dir0Data,
-    directionId: 0,
-    directionName: dir0Data.destination || "Montefiore",
-    timeOffsetSec: 0
-  });
+      const parsedStatus = parseStartRomagnaStatus(statusText, scheduledTime, nowRome);
 
-  // Bus 2 (Dir 1 - Verso Rio Maggiore)
-  const bus2 = simulateBusPosition({
-    busId: "CE-BUS-602",
-    busLabel: "Start Romagna 602",
-    routeData: dir1Data,
-    directionId: 1,
-    directionName: dir1Data.destination || "Rio Maggiore",
-    timeOffsetSec: 240 // sfasamento 4 minuti
-  });
-
-  // Bus 3 (Dir 0 - Verso Montefiore, seconda vettura cadenzata)
-  const bus3 = simulateBusPosition({
-    busId: "CE-BUS-603",
-    busLabel: "Start Romagna 603",
-    routeData: dir0Data,
-    directionId: 0,
-    directionName: dir0Data.destination || "Montefiore",
-    timeOffsetSec: 540 // sfasamento 9 minuti
-  });
-
-  // Bus 4 (Dir 1 - Verso Rio Maggiore, seconda vettura cadenzata)
-  const bus4 = simulateBusPosition({
-    busId: "CE-BUS-604",
-    busLabel: "Start Romagna 604",
-    routeData: dir1Data,
-    directionId: 1,
-    directionName: dir1Data.destination || "Rio Maggiore",
-    timeOffsetSec: 780 // sfasamento 13 minuti
-  });
-
-  return [bus1, bus2, bus3, bus4].filter(Boolean);
-}
-
-/**
- * Calcola le stime di arrivo in tempo reale (ETA) per una specifica fermata della Linea 6.
- * Restituisce i dettagli della fermata e la lista dei prossimi arrivi ordinati cronologicamente.
- * 
- * @param {Object} staticData Dati di linea6.json
- * @param {Array} liveBuses Array degli autobus attivi
- * @param {string} targetStopId stop_id o stop_code della fermata
- * @returns {Object|null}
- */
-function getStopArrivals(staticData, liveBuses = [], targetStopId) {
-  if (!staticData || !targetStopId) return null;
-
-  const idQuery = String(targetStopId).trim().toLowerCase();
-
-  const dir0Data = staticData?.routes_by_direction?.["0"] || {
-    destination: "Montefiore",
-    stops: staticData?.stops || []
-  };
-
-  const dir1Data = staticData?.routes_by_direction?.["1"] || {
-    destination: "Rio Maggiore",
-    stops: [...(staticData?.stops || [])].reverse()
-  };
-
-  // Cerca la fermata in entrambe le direzioni
-  const findInStops = (stops) =>
-    stops.findIndex(
-      (s) =>
-        String(s.stop_id).toLowerCase() === idQuery ||
-        String(s.stop_code).toLowerCase() === idQuery
-    );
-
-  const idx0 = findInStops(dir0Data.stops);
-  const idx1 = findInStops(dir1Data.stops);
-
-  if (idx0 === -1 && idx1 === -1) {
-    return null; // Fermata non trovata
-  }
-
-  // Prendi le informazioni anagrafiche della fermata
-  const stopInfo = idx0 !== -1 ? dir0Data.stops[idx0] : dir1Data.stops[idx1];
-
-  const directionsToProcess = [];
-  if (idx0 !== -1) {
-    directionsToProcess.push({
-      directionId: 0,
-      directionName: dir0Data.destination || "Montefiore",
-      targetIndex: idx0,
-      stops: dir0Data.stops
-    });
-  }
-  if (idx1 !== -1) {
-    directionsToProcess.push({
-      directionId: 1,
-      directionName: dir1Data.destination || "Rio Maggiore",
-      targetIndex: idx1,
-      stops: dir1Data.stops
-    });
-  }
-
-  const arrivals = [];
-
-  directionsToProcess.forEach(({ directionId, directionName, targetIndex, stops }) => {
-    const bus = liveBuses.find((b) => Number(b.direction_id) === Number(directionId));
-
-    if (bus) {
-      let currentIdx = stops.findIndex((s) => s.stop_id === bus.current_stop?.stop_id);
-      if (currentIdx === -1) {
-        // Fallback: fermata più vicina alle coordinate del bus
-        let minD = Infinity;
-        stops.forEach((s, i) => {
-          const d = haversineDistanceKm(bus.lat, bus.lon, s.lat, s.lon);
-          if (d < minD) {
-            minD = d;
-            currentIdx = i;
-          }
-        });
-      }
-
-      // Caso A: L'autobus sta arrivando verso questa fermata
-      if (currentIdx < targetIndex || (currentIdx === targetIndex && bus.progress < 0.1)) {
-        const stopsAway = Math.max(0, targetIndex - currentIdx);
-
-        // Calcolo distanza stradale cumulativa lungo le fermate
-        let distKm = 0;
-        if (targetIndex > currentIdx) {
-          // Distanza residua tra bus e prossima fermata
-          const nextStop = bus.next_stop || stops[currentIdx + 1];
-          if (nextStop) {
-            distKm += haversineDistanceKm(bus.lat, bus.lon, nextStop.lat, nextStop.lon);
-          }
-          for (let i = currentIdx + 1; i < targetIndex; i++) {
-            distKm += haversineDistanceKm(stops[i].lat, stops[i].lon, stops[i + 1].lat, stops[i + 1].lon);
-          }
-        } else {
-          distKm = haversineDistanceKm(bus.lat, bus.lon, stops[targetIndex].lat, stops[targetIndex].lon);
-        }
-
-        const distanceMeters = Math.round(distKm * 1000);
-        // Velocità media urbana Cesena ~22 km/h + 20s per sosta intermedia
-        const travelSec = (distKm / 22) * 3600;
-        const dwellSec = stopsAway * 20;
-        let etaSeconds = Math.max(0, Math.round(travelSec + dwellSec));
-
-        let etaMinutes;
-        let status;
-        let etaFormatted;
-
-        if (stopsAway === 0 || distanceMeters <= 80 || (bus.status === 'STOPPED_AT' && currentIdx === targetIndex)) {
-          etaSeconds = 0;
-          etaMinutes = 0;
-          status = (bus.status === 'STOPPED_AT' && currentIdx === targetIndex) ? "IN FERMATA" : "IN ARRIVO";
-          etaFormatted = status;
-        } else {
-          etaMinutes = Math.max(1, Math.round(etaSeconds / 60));
-          if (etaMinutes <= 1) {
-            status = "IN ARRIVO";
-            etaFormatted = "IN ARRIVO";
-          } else if (etaMinutes <= 3) {
-            status = "IN AVVICINAMENTO";
-            etaFormatted = `tra ${etaMinutes} min`;
-          } else {
-            status = "IN MARCIA";
-            etaFormatted = `tra ${etaMinutes} min`;
-          }
-        }
-
-        arrivals.push({
-          line: "6",
-          route_short_name: "6",
-          direction_id: directionId,
-          destination: directionName,
-          vehicle_label: bus.vehicle_label || `Bus ${bus.id}`,
-          bus_id: bus.id,
-          eta_minutes: etaMinutes,
-          eta_seconds: etaSeconds,
-          eta_formatted: etaFormatted,
-          stops_away: stopsAway,
-          distance_meters: distanceMeters,
-          status,
-          is_realtime: true
-        });
-      } else {
-        // Caso B: L'autobus ha già superato questa fermata nella corsa corrente.
-        // Calcola l'arrivo della corsa successiva in base alla frequenza programmata (18 min)
-        const passedStops = currentIdx - targetIndex;
-        const estimatedElapsedSec = passedStops * 90;
-        const headwaySec = 18 * 60; // Frequenza tipica Linea 6: 18 minuti
-        const nextRunEtaSec = Math.max(480, headwaySec - estimatedElapsedSec);
-        const nextRunEtaMin = Math.round(nextRunEtaSec / 60);
-        const stopsAwayEst = (stops.length - 1 - currentIdx) + targetIndex + 1;
-
-        arrivals.push({
-          line: "6",
-          route_short_name: "6",
-          direction_id: directionId,
-          destination: directionName,
-          vehicle_label: "Corsa successiva",
-          bus_id: null,
-          eta_minutes: nextRunEtaMin,
-          eta_seconds: nextRunEtaSec,
-          eta_formatted: `tra ${nextRunEtaMin} min`,
-          stops_away: stopsAwayEst,
-          distance_meters: Math.round(stopsAwayEst * 580),
-          status: "PROGRAMMATO",
-          is_realtime: false
-        });
-      }
-    } else {
-      // Nessun autobus live trovato per questa direzione: stima corsa programmata
       arrivals.push({
-        line: "6",
-        route_short_name: "6",
+        line: '6',
+        destination: destText,
         direction_id: directionId,
-        destination: directionName,
-        vehicle_label: "Corsa di linea",
-        bus_id: null,
-        eta_minutes: 15,
-        eta_seconds: 900,
-        eta_formatted: "tra 15 min",
-        stops_away: 8,
-        distance_meters: 4200,
-        status: "PROGRAMMATO",
-        is_realtime: false
+        scheduled_time: scheduledTime,
+        live_time: parsedStatus.liveTimeStr,
+        eta_minutes: parsedStatus.etaMinutes,
+        delay_minutes: parsedStatus.delayMinutes,
+        status_text: parsedStatus.displayText,
+        status_class: parsedStatus.statusClass,
+        is_cancelled: parsedStatus.isCancelled,
+        trip_id: tripId,
+        vehicle_id: vehicleId,
+        palina: String(palina)
       });
-    }
-  });
+    });
 
-  // Ordina arrivi per eta_seconds crescente
-  arrivals.sort((a, b) => a.eta_seconds - b.eta_seconds);
+    stopBoardCache.set(cacheKey, {
+      data: arrivals,
+      expiresAt: now + STOP_BOARD_CACHE_TTL_MS
+    });
 
-  return {
-    stop: {
-      stop_id: stopInfo.stop_id,
-      stop_code: stopInfo.stop_code,
-      stop_name: stopInfo.stop_name,
-      lat: stopInfo.lat,
-      lon: stopInfo.lon
-    },
-    arrivals
-  };
-}
-
-/**
- * Restituisce i feed live completi:
- * tenta prima la sorgente remota InfoBus (timeout 4s), con fallback automatico
- * sul simulatore deterministico sincronizzato con l'orologio di sistema.
- * 
- * @param {Object} staticData Contenuto di linea6.json
- * @returns {Promise<{ source: string, buses: Array }>}
- */
-async function getLiveFeed(staticData) {
-  try {
-    const liveBuses = await fetchRealtimeInfoBus();
-    return {
-      source: "infobus_realtime",
-      buses: liveBuses
-    };
+    return arrivals;
   } catch (err) {
-    // Fallback automatico trasparente
-    const simulatedBuses = generateSimulatorBuses(staticData);
-    return {
-      source: "simulator_fallback",
-      buses: simulatedBuses
-    };
+    console.error(`[InfoBus] Errore fetchStopBoard palina ${palina}:`, err.message);
+    if (cached) return cached.data;
+    return [];
   }
 }
 
 /**
- * Funzione principale richiesta dalla specifica:
- * restituisce un array di autobus attivi sulla Linea 6.
- * All'array è inoltre allegata la proprietà `.source` per comodità dei consumatori.
- * 
- * @param {Object} staticData
- * @returns {Promise<Array>}
+ * Scarica la tabella di marcia di un singolo trip da GetPercorso.
  */
-async function getLiveBuses(staticData) {
-  const feed = await getLiveFeed(staticData);
-  const buses = feed.buses;
-  buses.source = feed.source;
-  return buses;
+async function fetchTripPercorso(tripId, palina = '6721') {
+  if (!tripId) return [];
+  const cached = percorsoCache.get(tripId);
+  const now = Date.now();
+  if (cached && now < cached.expiresAt) {
+    return cached.stops;
+  }
+
+  try {
+    const res = await fetch('https://infobus.startromagna.it/PercorsoService.asmx/GetPercorso', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json; charset=UTF-8',
+        'X-Requested-With': 'XMLHttpRequest'
+      },
+      body: JSON.stringify({ trip_id: tripId, palina: String(palina) })
+    });
+
+    const json = await res.json();
+    const rawStops = typeof json.d === 'string' ? JSON.parse(json.d) : json.d;
+    if (!Array.isArray(rawStops)) return [];
+
+    const sorted = rawStops.sort((a, b) => a.stop_sequence - b.stop_sequence);
+    percorsoCache.set(tripId, {
+      stops: sorted,
+      expiresAt: now + PERCORSO_CACHE_TTL_MS
+    });
+
+    return sorted;
+  } catch (err) {
+    console.error(`[InfoBus] Errore fetchTripPercorso trip ${tripId}:`, err.message);
+    if (cached) return cached.stops;
+    return [];
+  }
 }
 
 /**
- * Calcola i prossimi 4 autobus per la fermata selezionata con stima di cammino ("walking_info")
- * e valutazione immediata di fattibilità per il passeggero ("catchability": EASY, HURRY, MISSED).
+ * Calcola la posizione reale dei bus attivi interpolando le coordinate delle fermate del percorso.
+ * ZERO SIMULATORI: se non ci sono corse attive, restituisce [].
  */
-function getPassengerArrivals({
-  staticData,
-  liveBuses = [],
-  stopId,
-  directionId = 0,
-  userLat = null,
-  userLon = null,
-  walkingMinutesParam = null
-}) {
-  if (!staticData || !stopId) return null;
+async function getRealLiveBuses(staticData) {
+  const routes = staticData.routes_by_direction || {};
+  const stopsDir0 = routes['0']?.stops || [];
+  const stopsDir1 = routes['1']?.stops || [];
 
-  const idQuery = String(stopId).trim().toLowerCase();
-  let dir = Number(directionId) === 1 ? 1 : 0;
+  // Mappa rapida per ottenere coordinate (lat, lon) e nome per qualsiasi palina
+  const stopCoordsMap = new Map();
+  [...stopsDir0, ...stopsDir1].forEach(s => {
+    stopCoordsMap.set(String(s.stop_id), { lat: s.lat, lon: s.lon, stop_name: s.stop_name });
+  });
 
-  let dirData = staticData.routes_by_direction?.[String(dir)];
-  let dirStops = dirData?.stops || [];
+  // Fermate sonda per catturare tutti i bus in circolazione su entrambe le direzioni
+  const probeStops = [
+    { target_id: '2985', palina: '6721' }, // Quasimodo (passano entrambe le direzioni)
+    { target_id: '2495', palina: '5161' }, // Cesena FS
+    { target_id: '2602', palina: '5692' }, // Ghirotti Ospedale
+    { target_id: '2983', palina: '6700' }, // Rio Maggiore
+    { target_id: '2994', palina: '6770' }  // Montefiore
+  ];
 
-  // Trova la fermata nella direzione scelta
-  let stopIdx = dirStops.findIndex(
-    (s) =>
-      String(s.stop_id).toLowerCase() === idQuery ||
-      String(s.stop_code).toLowerCase() === idQuery
+  const boardResults = await Promise.allSettled(
+    probeStops.map(p => fetchStopBoard(p.target_id, p.palina))
   );
 
-  // Se non trovata nella direzione richiesta, controlla l'altra direzione
-  if (stopIdx === -1) {
-    const altDir = dir === 0 ? 1 : 0;
-    const altData = staticData.routes_by_direction?.[String(altDir)];
-    const altStops = altData?.stops || [];
-    const altIdx = altStops.findIndex(
-      (s) =>
-        String(s.stop_id).toLowerCase() === idQuery ||
-        String(s.stop_code).toLowerCase() === idQuery
-    );
-    if (altIdx !== -1) {
-      dir = altDir;
-      dirData = altData;
-      dirStops = altStops;
-      stopIdx = altIdx;
-    } else {
-      return null; // Fermata inesistente
-    }
-  }
-
-  const stop = dirStops[stopIdx];
-  const destination = dirData.destination || (dir === 0 ? "Montefiore" : "Rio Maggiore");
-
-  // Calcolo tempo di cammino a piedi (4.8 km/h = 80 metri/minuto)
-  let walkingDistanceMeters = null;
-  let isGpsDerived = false;
-  let walkingMinutes = 2; // Default passeggero se non specificato
-
-  if (userLat != null && userLon != null && !isNaN(parseFloat(userLat)) && !isNaN(parseFloat(userLon))) {
-    const uLat = parseFloat(userLat);
-    const uLon = parseFloat(userLon);
-    walkingDistanceMeters = Math.round(haversineDistanceKm(uLat, uLon, stop.lat, stop.lon) * 1000);
-    walkingMinutes = Math.max(0, Math.round(walkingDistanceMeters / 80));
-    isGpsDerived = true;
-  }
-
-  if (walkingMinutesParam != null && !isNaN(parseInt(walkingMinutesParam, 10))) {
-    walkingMinutes = Math.max(0, parseInt(walkingMinutesParam, 10));
-    isGpsDerived = false;
-  }
-
-  // Cerca tra tutti gli autobus live attivi in questa direzione
-  const dirBuses = (liveBuses || []).filter((b) => Number(b.direction_id) === Number(dir));
-  let bestLiveBus = null;
-  let bestStopsAway = Infinity;
-  let bestCurrentBusIdx = -1;
-
-  dirBuses.forEach((b) => {
-    let busIdx = dirStops.findIndex((s) => s.stop_id === b.current_stop?.stop_id);
-    if (busIdx === -1) {
-      let minD = Infinity;
-      dirStops.forEach((s, i) => {
-        const d = haversineDistanceKm(b.lat, b.lon, s.lat, s.lon);
-        if (d < minD) {
-          minD = d;
-          busIdx = i;
+  const activeTripsMap = new Map();
+  for (const r of boardResults) {
+    if (r.status === 'fulfilled' && Array.isArray(r.value)) {
+      for (const item of r.value) {
+        if (!item.trip_id || item.is_cancelled) continue;
+        if (!activeTripsMap.has(item.trip_id)) {
+          activeTripsMap.set(item.trip_id, item);
+        } else {
+          // Se presente, prendi il dato con ETA più basso o veicolo valorizzato
+          const existing = activeTripsMap.get(item.trip_id);
+          if (!existing.vehicle_id && item.vehicle_id) {
+            existing.vehicle_id = item.vehicle_id;
+          }
         }
-      });
-    }
-
-    // Un bus si sta avvicinando se non ha ancora superato la fermata
-    const isApproaching = busIdx !== -1 && (
-      busIdx < stopIdx || (busIdx === stopIdx && b.status === 'STOPPED_AT' && (b.progress || 0) < 0.2)
-    );
-
-    if (isApproaching) {
-      const stopsAway = Math.max(0, stopIdx - busIdx);
-      if (stopsAway < bestStopsAway) {
-        bestStopsAway = stopsAway;
-        bestLiveBus = b;
-        bestCurrentBusIdx = busIdx;
       }
     }
+  }
+
+  const nowRome = getRomeTimeParts();
+  const currentTotalSeconds = nowRome.totalSeconds;
+  const liveBuses = [];
+
+  for (const [tripId, tripMeta] of activeTripsMap.entries()) {
+    const rawPercorso = await fetchTripPercorso(tripId, tripMeta.palina || '6721');
+    if (!rawPercorso || rawPercorso.length < 2) continue;
+
+    // Aggiusta gli orari di fermata con il ritardo effettivo rilevato
+    const delaySec = (tripMeta.delay_minutes || 0) * 60;
+    const adjustedStops = rawPercorso.map(s => {
+      const scheduledSec = timeStrToSeconds(s.departure_time || s.arrival_time) || 0;
+      return {
+        ...s,
+        adjustedSec: scheduledSec + delaySec,
+        coords: stopCoordsMap.get(String(s.stop_id)) || null
+      };
+    });
+
+    const firstStop = adjustedStops[0];
+    const lastStop = adjustedStops[adjustedStops.length - 1];
+
+    // Se la corsa è terminata da più di 5 minuti o deve iniziare tra più di 15 minuti, scartala
+    if (currentTotalSeconds > lastStop.adjustedSec + 300) continue;
+    if (currentTotalSeconds < firstStop.adjustedSec - 900) continue;
+
+    let stopA = firstStop;
+    let stopB = adjustedStops[1];
+    let progress = 0;
+    let statusText = 'IN_TRANSITO';
+
+    if (currentTotalSeconds <= firstStop.adjustedSec) {
+      // In attesa al capolinea di partenza
+      stopA = firstStop;
+      stopB = adjustedStops[1];
+      progress = 0;
+      statusText = 'AL_CAPOLINEA';
+    } else if (currentTotalSeconds >= lastStop.adjustedSec) {
+      // Arrivato al capolinea finale
+      stopA = adjustedStops[adjustedStops.length - 2] || firstStop;
+      stopB = lastStop;
+      progress = 1;
+      statusText = 'ARRIVATO';
+    } else {
+      // In viaggio tra due fermate consecutive
+      for (let i = 0; i < adjustedStops.length - 1; i++) {
+        const s1 = adjustedStops[i];
+        const s2 = adjustedStops[i + 1];
+        if (currentTotalSeconds >= s1.adjustedSec && currentTotalSeconds <= s2.adjustedSec) {
+          stopA = s1;
+          stopB = s2;
+          const span = Math.max(10, s2.adjustedSec - s1.adjustedSec);
+          progress = Math.min(1, Math.max(0, (currentTotalSeconds - s1.adjustedSec) / span));
+          break;
+        }
+      }
+    }
+
+    const coordsA = stopA.coords || { lat: 44.14000, lon: 12.24000 };
+    const coordsB = stopB.coords || coordsA;
+
+    const lat = coordsA.lat + (coordsB.lat - coordsA.lat) * progress;
+    const lon = coordsA.lon + (coordsB.lon - coordsA.lon) * progress;
+    const bearing = calculateBearing(coordsA.lat, coordsA.lon, coordsB.lat, coordsB.lon);
+
+    liveBuses.push({
+      id: tripMeta.vehicle_id ? `bus_${tripMeta.vehicle_id}` : `trip_${tripId}`,
+      vehicle_id: tripMeta.vehicle_id || 'N.D.',
+      trip_id: tripId,
+      direction_id: tripMeta.direction_id || '0',
+      destination: tripMeta.destination,
+      lat: Math.round(lat * 100000) / 100000,
+      lon: Math.round(lon * 100000) / 100000,
+      bearing,
+      delay_minutes: tripMeta.delay_minutes || 0,
+      status: statusText,
+      status_text: tripMeta.status_text,
+      current_stop: {
+        stop_id: String(stopA.stop_id),
+        stop_name: stopA.coords?.stop_name || stopA.stop_name
+      },
+      next_stop: {
+        stop_id: String(stopB.stop_id),
+        stop_name: stopB.coords?.stop_name || stopB.stop_name
+      },
+      is_live: true,
+      last_sync_rome: nowRome.timeString
+    });
+  }
+
+  // Deduplicazione per veicolo (evita doppioni se lo stesso bus ha il trip attuale e il successivo in coda)
+  const uniqueBusesMap = new Map();
+  for (const b of liveBuses) {
+    const key = b.vehicle_id !== 'N.D.' ? b.vehicle_id : b.trip_id;
+    if (!uniqueBusesMap.has(key)) {
+      uniqueBusesMap.set(key, b);
+    } else {
+      const existing = uniqueBusesMap.get(key);
+      if (b.status === 'IN_TRANSITO' && existing.status !== 'IN_TRANSITO') {
+        uniqueBusesMap.set(key, b);
+      }
+    }
+  }
+
+  return [...uniqueBusesMap.values()];
+}
+
+/**
+ * Calcola gli arrivi in tempo reale e la fattibilità a piedi per la fermata richiesta.
+ */
+async function getPassengerArrivals({ staticData, stopId, directionId, userLat, userLon, walkingMinutesParam }) {
+  const routes = staticData.routes_by_direction || {};
+  const allStops = [
+    ...(routes['0']?.stops || []),
+    ...(routes['1']?.stops || [])
+  ];
+
+  const targetStop = allStops.find(s => String(s.stop_id) === String(stopId)) || allStops[0];
+  if (!targetStop) return null;
+
+  const rawArrivals = await fetchStopBoard(targetStop.target_id || '', targetStop.stop_id);
+  const nowRome = getRomeTimeParts();
+
+  // Filtra per direzione se specificata
+  const filtered = directionId !== undefined && directionId !== null && directionId !== ''
+    ? rawArrivals.filter(a => a.direction_id === String(directionId))
+    : rawArrivals;
+
+  // Filtra corse già passate (ETA < -1)
+  const activeArrivals = filtered.filter(a => a.eta_minutes === null || a.eta_minutes >= -1);
+
+  // Ordina per ETA crescente
+  activeArrivals.sort((a, b) => {
+    if (a.eta_minutes === null) return 1;
+    if (b.eta_minutes === null) return -1;
+    return a.eta_minutes - b.eta_minutes;
   });
 
-  // Se non c'è un bus prima di stopIdx, seleziona il bus live della flotta che completerà il giro per primo
-  if (!bestLiveBus && dirBuses.length > 0) {
-    // Ordina per bus più avanzato nel percorso (più vicino al capolinea di arrivo)
-    let maxIdx = -1;
-    let advancedBus = dirBuses[0];
-    dirBuses.forEach((b) => {
-      let bIdx = dirStops.findIndex((s) => s.stop_id === b.current_stop?.stop_id);
-      if (bIdx > maxIdx) {
-        maxIdx = bIdx;
-        advancedBus = b;
-      }
-    });
-    bestLiveBus = advancedBus;
-    bestCurrentBusIdx = maxIdx !== -1 ? maxIdx : 0;
-  } else if (!bestLiveBus && liveBuses.length > 0) {
-    bestLiveBus = liveBuses[0];
-    bestCurrentBusIdx = 0;
+  // Calcolo tempo a piedi reale
+  let walkingMinutes = 1;
+  let distanceMeters = 0;
+  if (walkingMinutesParam !== undefined && walkingMinutesParam !== null && !isNaN(parseFloat(walkingMinutesParam))) {
+    walkingMinutes = Math.max(1, Math.round(parseFloat(walkingMinutesParam)));
+  } else if (userLat && userLon) {
+    distanceMeters = haversineMeters(parseFloat(userLat), parseFloat(userLon), targetStop.lat, targetStop.lon);
+    // Velocità pedonale media urbana: 80 metri/min (~4.8 km/h)
+    walkingMinutes = Math.max(1, Math.ceil(distanceMeters / 80));
   }
 
-  const liveBus = bestLiveBus;
-  const currentBusIdx = bestCurrentBusIdx;
-  const isLiveBusApproaching = Boolean(liveBus);
+  const enrichedArrivals = activeArrivals.map(arr => {
+    const canCatch = arr.eta_minutes !== null ? arr.eta_minutes >= walkingMinutes : true;
+    const marginMinutes = arr.eta_minutes !== null ? arr.eta_minutes - walkingMinutes : 0;
 
-  let baseEtaMin = 5;
-  const nextBuses = [];
-
-  const nowMs = Date.now();
-
-  if (isLiveBusApproaching) {
-    // 1. Il primo autobus è SEMPRE il veicolo reale live attualmente in marcia sulla linea
-    let stopsAway;
-    let distanceMeters = 0;
-
-    if (currentBusIdx <= stopIdx) {
-      stopsAway = Math.max(0, stopIdx - currentBusIdx);
-      if (stopIdx > currentBusIdx) {
-        const nextS = liveBus.next_stop || dirStops[currentBusIdx + 1];
-        if (nextS) {
-          distanceMeters += Math.round(haversineDistanceKm(liveBus.lat, liveBus.lon, nextS.lat, nextS.lon) * 1000);
-        }
-        for (let i = currentBusIdx + 1; i < stopIdx; i++) {
-          distanceMeters += (dirStops[i].distance_to_next_meters || Math.round(haversineDistanceKm(dirStops[i].lat, dirStops[i].lon, dirStops[i + 1].lat, dirStops[i + 1].lon) * 1000));
-        }
-      } else {
-        distanceMeters = Math.round(haversineDistanceKm(liveBus.lat, liveBus.lon, stop.lat, stop.lon) * 1000);
-      }
-    } else {
-      // Il bus è più avanti: completerà la corsa al capolinea e ripartirà
-      const remainingCurrentRun = Math.max(0, (dirStops.length - 1) - currentBusIdx);
-      stopsAway = remainingCurrentRun + stopIdx + 1;
-      distanceMeters = stopsAway * 480;
-    }
-
-    const travelSec = (distanceMeters / (22000 / 3600));
-    const dwellSec = stopsAway * 20;
-    const etaSec = Math.max(0, Math.round(travelSec + dwellSec));
-
-    let etaMin = (stopsAway === 0 || distanceMeters <= 80 || (liveBus.status === 'STOPPED_AT' && currentBusIdx === stopIdx))
-      ? 0
-      : Math.max(1, Math.round(etaSec / 60));
-
-    baseEtaMin = etaMin;
-
-    nextBuses.push({
-      order: 1,
-      line: "6",
-      destination,
-      vehicle_label: liveBus.vehicle_label || "Start Romagna 6",
-      bus_id: liveBus.id,
-      is_live: true,
-      eta_minutes: etaMin,
-      stops_away: stopsAway,
-      distance_meters: distanceMeters,
-      status: etaMin === 0 ? "IN FERMATA" : (etaMin <= 1 ? "IN ARRIVO" : "IN MARCIA"),
-      live_location: {
-        lat: liveBus.lat,
-        lon: liveBus.lon,
-        speed_kmh: liveBus.speed_kmh,
-        bearing: liveBus.bearing
-      }
-    });
-  } else {
-    // Fallback di sicurezza estrema
-    baseEtaMin = 6;
-    nextBuses.push({
-      order: 1,
-      line: "6",
-      destination,
-      vehicle_label: "Start Romagna 601",
-      bus_id: "CE-BUS-601",
-      is_live: true,
-      eta_minutes: baseEtaMin,
-      stops_away: 3,
-      distance_meters: 1500,
-      status: "IN MARCIA",
-      live_location: {
-        lat: stop.lat,
-        lon: stop.lon,
-        speed_kmh: 24,
-        bearing: 90
-      }
-    });
-  }
-
-  // Genera le successive 3 corse programmate a intervalli di 15 minuti (totale 4 corse)
-  const FREQUENCY_MIN = 15;
-  for (let k = 2; k <= 4; k++) {
-    const scheduledEta = baseEtaMin + (k - 1) * FREQUENCY_MIN;
-    nextBuses.push({
-      order: k,
-      line: "6",
-      destination,
-      vehicle_label: `Start Romagna 6 (${k}° corsa)`,
-      bus_id: null,
-      is_live: false,
-      eta_minutes: scheduledEta,
-      stops_away: nextBuses[0].stops_away + (k - 1) * (dirStops.length - 1),
-      distance_meters: nextBuses[0].distance_meters + (k - 1) * 5200,
-      status: "PROGRAMMATO",
-      live_location: null
-    });
-  }
-
-  // Calcolo catchability ("Riuscirò a prenderlo?") e formattazione orari per ciascun bus
-  nextBuses.forEach((b) => {
-    const arrivalDate = new Date(nowMs + b.eta_minutes * 60000);
-    b.expected_time = arrivalDate.toLocaleTimeString('it-IT', { hour: '2-digit', minute: '2-digit' });
-
-    const margin = b.eta_minutes - walkingMinutes;
-
-    if (margin >= 2) {
-      b.catchability = {
-        code: "EASY",
-        color: "green",
-        badge: "🟢 Fai in tempo a piedi",
-        title: "Fai in tempo a piedi",
-        message: margin > 2
-          ? `Esci tra ${margin} min (hai ${margin} min di margine)`
-          : `Sei a ${walkingMinutes} min a piedi, il bus arriva tra ${b.eta_minutes} min`,
-        margin_minutes: margin
-      };
-    } else if (margin >= 0) {
-      b.catchability = {
-        code: "HURRY",
-        color: "yellow",
-        badge: "🟡 Esci subito",
-        title: "Esci subito",
-        message: `Arriva tra ${b.eta_minutes} min, parti subito a passo svelto!`,
-        margin_minutes: margin
-      };
-    } else {
-      b.catchability = {
-        code: "MISSED",
-        color: "red",
-        badge: "🔴 Troppo vicino, punta al successivo",
-        title: "Troppo vicino",
-        message: `Arriva tra ${b.eta_minutes} min (ti servono ${walkingMinutes} min a piedi). Prendi la corsa successiva!`,
-        margin_minutes: margin
-      };
-    }
+    return {
+      ...arr,
+      walking_minutes: walkingMinutes,
+      can_catch: canCatch,
+      margin_minutes: marginMinutes
+    };
   });
 
   return {
     stop: {
-      stop_id: stop.stop_id,
-      stop_code: stop.stop_code,
-      stop_name: stop.stop_name,
-      lat: stop.lat,
-      lon: stop.lon
-    },
-    direction: {
-      direction_id: dir,
-      destination
+      stop_id: targetStop.stop_id,
+      target_id: targetStop.target_id,
+      stop_name: targetStop.stop_name,
+      lat: targetStop.lat,
+      lon: targetStop.lon
     },
     walking_info: {
       walking_minutes: walkingMinutes,
-      walking_distance_meters: walkingDistanceMeters,
-      speed_kmh: 4.8,
-      is_gps_derived: isGpsDerived
+      distance_meters: distanceMeters
     },
-    next_buses: nextBuses
+    current_time_rome: nowRome.timeString,
+    arrivals: enrichedArrivals
   };
 }
 
 module.exports = {
-  getLiveBuses,
-  getLiveFeed,
-  getStopArrivals,
-  getPassengerArrivals,
-  calculateBearing,
-  haversineDistanceKm,
-  simulateBusPosition,
-  generateSimulatorBuses,
-  interpolateAlongPath
+  getRomeTimeParts,
+  fetchStopBoard,
+  fetchTripPercorso,
+  getRealLiveBuses,
+  getPassengerArrivals
 };
 ```
 
@@ -1321,11 +897,11 @@ module.exports = {
 <html lang="it">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
-  <title>Linea 6 Cesena Live • Posizione Autobus in Tempo Reale | Start Romagna</title>
-  <meta name="description" content="Mappa interattiva in tempo reale della Linea 6 di Cesena (Rio Maggiore - Campus Universitario - Stazione FS - Ospedale Bufalini - Montefiore)." />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+  <title>Linea 6 Cesena Live • Start Romagna</title>
+  <meta name="description" content="Arrivi e posizione in tempo reale dei bus della Linea 6 di Cesena (Start Romagna)." />
 
-  <!-- PWA & iOS Safari Mobile Web App -->
+  <!-- PWA & iOS Safari Mobile Web App a tutto schermo -->
   <meta name="theme-color" content="#E30613" />
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-status-bar-style" content="default" />
@@ -1333,16 +909,17 @@ module.exports = {
   <link rel="apple-touch-icon" href="/icon.svg" />
   <link rel="manifest" href="/manifest.json" />
 
-  <!-- Tailwind CSS -->
+  <!-- Tailwind CSS CDN -->
   <script src="https://cdn.tailwindcss.com"></script>
 
-  <!-- Google Fonts: Inter / Roboto -->
+  <!-- Google Font: Inter -->
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet" />
 
-  <!-- Leaflet 1.9.4 CSS -->
+  <!-- Leaflet 1.9.4 CSS & JS -->
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin="" />
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
 
   <style>
     * {
@@ -1356,1383 +933,731 @@ module.exports = {
       height: 100%;
       overflow: hidden;
       font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
-      background: #e5e7eb;
+      background: #f1f5f9;
+      user-select: none;
     }
 
-    /* Mappa Full Screen */
     #map {
-      position: fixed;
-      inset: 0;
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
       width: 100vw;
       height: 100vh;
       z-index: 1;
     }
 
-    /* Filtro stile Google Maps Transit sulle tile OSM */
-    .gmaps-tiles {
-      filter: saturate(0.88) contrast(0.98) brightness(1.02);
+    /* Stile pulito tile mappa */
+    .leaflet-tile {
+      filter: saturate(0.85) contrast(0.98) brightness(1.02);
     }
 
-    /* Pannello Fluttuante Stile Google Maps */
-    .gmaps-panel {
-      position: fixed;
-      top: 16px;
-      left: 16px;
-      width: 375px;
-      max-width: calc(100vw - 32px);
-      max-height: calc(100vh - 32px);
-      overflow-y: auto;
-      background: rgba(255, 255, 255, 0.98);
-      backdrop-filter: blur(12px);
-      border-radius: 20px;
-      box-shadow: 0 10px 30px rgba(15, 23, 42, 0.16), 0 2px 6px rgba(15, 23, 42, 0.08);
-      z-index: 1000;
-      border: 1px solid rgba(226, 232, 240, 0.9);
-      transition: transform 0.3s cubic-bezier(0.22, 1, 0.36, 1);
-    }
-
-    @media (max-width: 640px) {
-      .gmaps-panel {
-        top: auto;
-        bottom: 0;
-        left: 0;
-        right: 0;
-        width: 100vw;
-        max-width: 100vw;
-        max-height: 64vh;
-        border-radius: 22px 22px 0 0;
-      }
-      .gmaps-panel.collapsed {
-        transform: translateY(calc(100% - 86px));
-      }
-    }
-
-    /* Punto Blu Utente Stile Google Maps */
-    .user-blue-dot-wrapper {
-      position: relative;
-      width: 22px;
-      height: 22px;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      cursor: grab;
-    }
-    .user-blue-dot-wrapper:active {
-      cursor: grabbing;
-    }
-    .user-blue-halo {
-      position: absolute;
-      width: 44px;
-      height: 44px;
-      border-radius: 9999px;
-      background: rgba(26, 115, 232, 0.22);
-      animation: userPulse 2.2s infinite ease-out;
-      pointer-events: none;
-    }
-    .user-blue-core {
-      position: relative;
-      width: 16px;
-      height: 16px;
-      border-radius: 9999px;
-      background: #1A73E8;
-      border: 3px solid #FFFFFF;
-      box-shadow: 0 2px 6px rgba(0, 0, 0, 0.35);
-      z-index: 2;
-    }
-    @keyframes userPulse {
-      0% { transform: scale(0.5); opacity: 0.9; }
-      100% { transform: scale(1.65); opacity: 0; }
-    }
-
-    /* Pin Fermata Selezionata dall'Utente */
-    .selected-stop-wrapper {
+    /* Marker Autobus Reale */
+    .bus-marker-wrap {
       display: flex;
       flex-direction: column;
       align-items: center;
-      pointer-events: none;
+      transform: translate(-50%, -50%);
+      pointer-events: auto;
     }
-    .selected-stop-label {
-      background: #0f172a;
-      color: #ffffff;
-      font-size: 11px;
-      font-weight: 600;
-      padding: 4px 10px;
-      border-radius: 9999px;
-      white-space: nowrap;
-      box-shadow: 0 4px 12px rgba(15, 23, 42, 0.25);
-      border: 1.5px solid #ffffff;
-      margin-bottom: 4px;
-    }
-    .selected-stop-dot {
-      width: 16px;
-      height: 16px;
-      border-radius: 9999px;
+    .bus-badge {
+      width: 38px;
+      height: 38px;
+      border-radius: 50%;
       background: #E30613;
-      border: 3px solid #ffffff;
-      box-shadow: 0 2px 8px rgba(227, 6, 19, 0.5);
-    }
-
-    /* Marker Autobus Live Stile Google Maps */
-    .bus-live-wrapper {
-      position: relative;
-      width: 46px;
-      height: 46px;
+      color: #ffffff;
+      font-weight: 900;
+      font-size: 17px;
       display: flex;
       align-items: center;
       justify-content: center;
+      box-shadow: 0 4px 12px rgba(227, 6, 19, 0.45), 0 0 0 3px #ffffff;
+      position: relative;
     }
-    .bus-radar-wave {
+    .bus-arrow {
       position: absolute;
-      width: 44px;
-      height: 44px;
-      border-radius: 9999px;
-      background: rgba(22, 163, 74, 0.28);
-      animation: busRadar 1.9s infinite ease-out;
-      pointer-events: none;
-    }
-    @keyframes busRadar {
-      0% { transform: scale(0.7); opacity: 0.9; }
-      100% { transform: scale(1.6); opacity: 0; }
-    }
-    .bus-compass-ring {
-      position: absolute;
-      inset: 0;
-      display: flex;
-      justify-content: center;
-      align-items: flex-start;
-      pointer-events: none;
-      transition: transform 0.15s linear;
-    }
-    .bus-heading-arrow {
+      top: -6px;
+      left: 50%;
       width: 0;
       height: 0;
-      border-left: 6px solid transparent;
-      border-right: 6px solid transparent;
-      border-bottom: 9px solid #1e293b;
-      margin-top: -4px;
-      filter: drop-shadow(0 1px 2px rgba(255,255,255,0.9));
+      border-left: 5px solid transparent;
+      border-right: 5px solid transparent;
+      border-bottom: 7px solid #E30613;
+      transform: translateX(-50%);
     }
-    .bus-circle-body {
-      position: relative;
-      width: 32px;
-      height: 32px;
-      border-radius: 9999px;
-      background: #1A73E8;
-      border: 2.5px solid #ffffff;
+    .bus-label {
+      margin-top: 3px;
+      background: rgba(15, 23, 42, 0.9);
       color: #ffffff;
-      font-weight: 800;
-      font-size: 13px;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      box-shadow: 0 4px 10px rgba(26, 115, 232, 0.45);
-      z-index: 3;
-    }
-    .bus-circle-body.is-primary {
-      background: #E30613;
-      box-shadow: 0 4px 12px rgba(227, 6, 19, 0.55);
-    }
-    .bus-pill-tag {
-      position: absolute;
-      top: 38px;
-      background: #ffffff;
-      color: #0f172a;
-      font-size: 10.5px;
+      font-size: 10px;
       font-weight: 700;
-      padding: 2px 7px;
+      padding: 2px 6px;
       border-radius: 9999px;
       white-space: nowrap;
-      box-shadow: 0 2px 6px rgba(15, 23, 42, 0.2);
-      border: 1px solid #cbd5e1;
-      z-index: 4;
+      box-shadow: 0 2px 6px rgba(0,0,0,0.25);
     }
 
-    /* Tooltip pulito al passaggio del mouse sulle fermate */
-    .leaflet-tooltip.clean-stop-tooltip {
-      background: #0f172a;
-      color: #ffffff;
-      border: none;
-      border-radius: 8px;
-      padding: 4px 8px;
-      font-size: 11.5px;
-      font-weight: 600;
-      box-shadow: 0 4px 10px rgba(0, 0, 0, 0.2);
+    /* Marker Fermata Selezionata */
+    .stop-selected-pulse {
+      width: 22px;
+      height: 22px;
+      border-radius: 50%;
+      background: #E30613;
+      border: 3px solid #ffffff;
+      box-shadow: 0 0 0 4px rgba(227, 6, 19, 0.35);
+      animation: pulseStop 2s infinite;
     }
-    .leaflet-tooltip.clean-stop-tooltip::before {
-      border-top-color: #0f172a;
+    @keyframes pulseStop {
+      0% { box-shadow: 0 0 0 2px rgba(227, 6, 19, 0.5); }
+      70% { box-shadow: 0 0 0 9px rgba(227, 6, 19, 0); }
+      100% { box-shadow: 0 0 0 2px rgba(227, 6, 19, 0); }
+    }
+
+    /* Punto Blu Utente */
+    .user-dot-wrap {
+      width: 18px;
+      height: 18px;
+      border-radius: 50%;
+      background: #2563EB;
+      border: 3px solid #ffffff;
+      box-shadow: 0 0 0 4px rgba(37, 99, 235, 0.3);
+    }
+
+    /* Bottom Sheet per iPhone */
+    #bottomSheet {
+      position: fixed;
+      bottom: 0;
+      left: 0;
+      right: 0;
+      max-width: 480px;
+      margin: 0 auto;
+      background: rgba(255, 255, 255, 0.98);
+      backdrop-filter: blur(16px);
+      border-top-left-radius: 28px;
+      border-top-right-radius: 28px;
+      box-shadow: 0 -8px 30px rgba(15, 23, 42, 0.15);
+      z-index: 1000;
+      transition: max-height 0.3s cubic-bezier(0.16, 1, 0.3, 1), transform 0.3s ease;
+      max-height: 48vh;
+      display: flex;
+      flex-direction: column;
+    }
+    #bottomSheet.collapsed {
+      max-height: 84px !important;
+    }
+    #bottomSheetContent {
+      overflow-y: auto;
+      -webkit-overflow-scrolling: touch;
     }
   </style>
 </head>
-<body>
+<body class="bg-slate-100 text-slate-800 antialiased">
 
-  <!-- Mappa Full-Screen -->
+  <!-- Mappa a tutto schermo (55-60% visibile in alto) -->
   <div id="map"></div>
 
-  <!-- Card Fluttuante Google Maps Transit -->
-  <aside id="transitPanel" class="gmaps-panel p-4">
-    <!-- Maniglia mobile per ridurre/espandere -->
-    <div id="mobileHandle" class="sm:hidden w-full flex justify-center pb-2 cursor-pointer">
-      <div class="w-10 h-1.5 bg-slate-300 rounded-full"></div>
-    </div>
-
-    <!-- Header Linea 6 Start Romagna -->
-    <div class="flex items-center justify-between pb-2.5 border-b border-slate-100">
-      <div class="flex items-center gap-3">
-        <div class="w-11 h-11 rounded-xl bg-[#E30613] text-white font-black text-xl flex items-center justify-center shadow-sm shrink-0">
-          6
-        </div>
-        <div>
-          <div class="flex items-center gap-2">
-            <h1 class="font-bold text-slate-900 text-base leading-tight">Linea 6 • Cesena</h1>
-            <span id="liveSourceBadge" class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200">
-              <span class="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-ping"></span>
-              LIVE GPS
-            </span>
-          </div>
-          <p class="text-xs text-slate-500 mt-0.5">Rio Maggiore ⇄ Università ⇄ FS ⇄ Bufalini ⇄ Montefiore</p>
-        </div>
-      </div>
-      <span id="roadGeometryStatus" class="text-[10px] font-semibold text-blue-600 bg-blue-50 px-2 py-1 rounded-lg border border-blue-100 shrink-0">
-        Strade OSM
-      </span>
-    </div>
-
-    <!-- Barra Orario Reale + Scelta Rapida Pendolare Mattina/Sera -->
-    <div class="mt-2.5 flex flex-wrap items-center justify-between gap-1.5">
-      <span id="scheduleBadge" class="text-[10px] font-bold px-2 py-1 rounded-lg bg-slate-100 text-slate-700 border border-slate-200">
-        🕒 Calcolo fascia oraria...
-      </span>
-      <div class="flex items-center gap-1">
-        <button id="chipMorningCommute" type="button" title="Andata Mattina: da Stazione FS verso Campus Universitario" class="text-[10px] font-bold px-2 py-1 rounded-lg bg-slate-100 hover:bg-blue-50 hover:text-blue-700 text-slate-600 border border-slate-200 transition">
-          🌅 FS ➔ Campus
-        </button>
-        <button id="chipEveningCommute" type="button" title="Rientro Pomeriggio: da Campus Universitario verso Stazione FS" class="text-[10px] font-bold px-2 py-1 rounded-lg bg-slate-100 hover:bg-blue-50 hover:text-blue-700 text-slate-600 border border-slate-200 transition">
-          🌇 Campus ➔ FS
-        </button>
-      </div>
-    </div>
-
-    <!-- Banner Fine Servizio Notturno (visibile solo tra le 20:45 e le 06:00) -->
-    <div id="nightServiceBanner" class="hidden mt-2.5 p-2.5 rounded-xl bg-slate-900 text-white text-xs flex items-center justify-between gap-2">
-      <div>
-        <div class="font-bold">🌙 Servizio serale terminato</div>
-        <div class="text-[11px] text-slate-300">Prima corsa domani mattina alle <strong>06:05</strong></div>
-      </div>
-      <button id="btnForceDaySim" type="button" class="px-2.5 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-500 text-[11px] font-bold shrink-0 transition">
-        Simula Diurno
-      </button>
-    </div>
-
-    <!-- 1. Scelta Direzione e Fermata -->
-    <div class="mt-2.5 space-y-2">
-      <!-- Selettore Direzione -->
-      <div class="grid grid-cols-2 gap-1.5 bg-slate-100 p-1 rounded-xl">
-        <button id="btnDir0" type="button" class="py-2 px-2.5 rounded-lg text-xs font-bold transition-all bg-white text-blue-600 shadow-sm flex items-center justify-center gap-1">
-          <span>➔</span> Verso Montefiore
-        </button>
-        <button id="btnDir1" type="button" class="py-2 px-2.5 rounded-lg text-xs font-bold transition-all text-slate-600 hover:text-slate-900 flex items-center justify-center gap-1">
-          <span>➔</span> Verso Rio Maggiore
-        </button>
-      </div>
-
-      <!-- Menu Fermata + Bottone Posizione Campus/GPS -->
-      <div class="flex items-center gap-1.5">
-        <div class="relative flex-1">
-          <select id="stopSelect" aria-label="Fermata di partenza" class="w-full appearance-none bg-slate-50 hover:bg-slate-100 border border-slate-200 text-slate-800 text-xs font-semibold rounded-xl pl-3 pr-8 py-2.5 focus:outline-none focus:ring-2 focus:ring-blue-500 cursor-pointer">
-          </select>
-          <div class="pointer-events-none absolute inset-y-0 right-0 flex items-center px-2.5 text-slate-500">
-            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>
-          </div>
-        </div>
-        <button id="btnLocateCampus" type="button" title="Posizionati al Campus Universitario" class="px-2.5 py-2.5 rounded-xl bg-blue-50 hover:bg-blue-100 text-blue-700 border border-blue-200 text-xs font-bold shrink-0 transition" aria-label="Campus Universitario">
-          🎓 Campus
-        </button>
-        <button id="btnRealGps" type="button" title="Usa il tuo GPS reale" class="p-2.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-200 text-xs font-bold shrink-0 transition" aria-label="Posizione GPS">
-          📍
-        </button>
-      </div>
-
-      <!-- Info distanza pedonale reale + Sveglia di partenza -->
-      <div id="walkBanner" class="flex items-center justify-between gap-2 text-[11px] bg-blue-50/80 text-blue-900 px-3 py-1.5 rounded-lg border border-blue-100">
-        <span id="walkText" class="truncate">📍 Dal tuo punto: <strong>45m</strong> (~1 min a piedi)</span>
-        <span id="walkModeBadge" class="text-[10px] text-blue-700 bg-blue-100/80 px-1.5 py-0.5 rounded font-semibold shrink-0">Sentiero OSM</span>
-      </div>
-
-      <!-- Pulsante Sveglia "Esci Ora" -->
-      <button id="btnToggleAlarm" type="button" class="w-full py-1.5 px-3 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 text-xs font-bold flex items-center justify-between transition">
-        <span id="alarmBtnText">🔔 Attiva sveglia "Esci ora"</span>
-        <span id="alarmStatusPill" class="text-[10px] font-bold px-2 py-0.5 rounded-full bg-slate-100 text-slate-500">OFF</span>
-      </button>
-
-      <!-- Banner Allarme Attivo quando è il momento di uscire -->
-      <div id="alarmAlertBanner" class="hidden p-3 rounded-xl bg-amber-500 text-white text-xs font-bold shadow-md animate-bounce items-center justify-between gap-2">
-        <span id="alarmAlertText">🚨 ESCI ORA! Il bus è in arrivo!</span>
-        <button id="btnDismissAlarm" type="button" class="px-2 py-1 rounded bg-white/20 hover:bg-white/30 text-[10px] font-extrabold shrink-0">
-          OK
-        </button>
-      </div>
-    </div>
-
-    <!-- 2. Box Principale: "Riuscirò a prenderlo?" -->
-    <div id="heroArrivalBox" class="mt-3 p-3.5 rounded-2xl bg-slate-50 border border-slate-200/90">
-      <!-- Popolato in tempo reale da JS -->
-    </div>
-
-    <!-- 3. Passaggi Successivi -->
-    <div class="mt-3 pt-2.5 border-t border-slate-100">
-      <div class="flex items-center justify-between mb-1.5">
-        <span class="text-[11px] font-bold uppercase tracking-wider text-slate-400">Passaggi successivi a questa fermata</span>
-        <span id="liveClock" class="text-[11px] font-semibold text-slate-400"></span>
-      </div>
-      <div id="subsequentBusesList" class="space-y-1.5">
-        <!-- Popolato in tempo reale da JS -->
-      </div>
-    </div>
-  </aside>
-
-  <!-- Pulsanti Rapidi in Basso a Destra (Stile Google Maps) -->
-  <div class="fixed bottom-6 right-4 z-[900] flex flex-col gap-2">
-    <button id="fabCenterUser" type="button" title="Vai alla tua posizione" class="w-11 h-11 rounded-full bg-white shadow-lg border border-slate-200 flex items-center justify-center text-slate-700 hover:bg-slate-50 active:scale-95 transition">
-      <svg class="w-5 h-5 text-blue-600" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-        <circle cx="12" cy="12" r="7"/><line x1="12" y1="2" x2="12" y2="5"/><line x1="12" y1="19" x2="12" y2="22"/><line x1="2" y1="12" x2="5" y2="12"/><line x1="19" y1="12" x2="22" y2="12"/>
+  <!-- Pulsanti Mappa Floating -->
+  <div class="fixed top-4 right-4 z-[500] flex flex-col gap-2.5">
+    <!-- Centra GPS Utente -->
+    <button id="btnLocate" title="Mia Posizione" class="w-12 h-12 bg-white/95 backdrop-blur-md rounded-2xl shadow-lg border border-slate-100 flex items-center justify-center text-slate-700 active:scale-95 transition hover:bg-slate-50">
+      <svg class="w-6 h-6 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 2v2m0 16v2m10-10h-2M4 12H2m15.071-7.071l-1.414 1.414M8.343 15.657l-1.414 1.414m0-11.314l1.414 1.414m7.314 7.314l1.414 1.414M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
       </svg>
     </button>
-    <button id="fabFitRoute" type="button" title="Inquadra intera Linea 6" class="w-11 h-11 rounded-full bg-white shadow-lg border border-slate-200 flex items-center justify-center text-slate-700 hover:bg-slate-50 active:scale-95 transition">
-      <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-        <path stroke-linecap="round" stroke-linejoin="round" d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7"/>
+    <!-- Inquadra Bus in circolazione -->
+    <button id="btnFitBuses" title="Inquadra Autobus" class="w-12 h-12 bg-white/95 backdrop-blur-md rounded-2xl shadow-lg border border-slate-100 flex items-center justify-center text-slate-700 active:scale-95 transition hover:bg-slate-50">
+      <svg class="w-6 h-6 text-[#E30613]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7h8m-8 4h8m-9 8h10a2 2 0 002-2V6a2 2 0 00-2-2H7a2 2 0 00-2 2v11a2 2 0 002 2zm1-2a1 1 0 100-2 1 1 0 000 2zm8 0a1 1 0 100-2 1 1 0 000 2z" />
       </svg>
     </button>
   </div>
 
-  <!-- Leaflet 1.9.4 JS -->
-  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
+  <!-- Bottom Sheet Transit iOS Safari Mobile-First -->
+  <aside id="bottomSheet" class="p-4 pb-6 border-t border-slate-100">
+    <!-- Maniglia Sticky (Cliccabile per aprire/chiudere) -->
+    <div id="sheetHandle" class="w-full flex flex-col items-center cursor-pointer select-none pb-2 shrink-0">
+      <div class="w-11 h-1.5 bg-slate-300 rounded-full mb-1.5"></div>
+      <!-- Barra di sintesi visibile quando la card è chiusa -->
+      <div id="collapsedSummary" class="hidden w-full flex items-center justify-between px-1 text-xs">
+        <div class="flex items-center gap-2">
+          <span class="w-6 h-6 rounded-lg bg-[#E30613] text-white font-extrabold flex items-center justify-center text-xs">6</span>
+          <span id="collapsedStopText" class="font-bold text-slate-800 truncate max-w-[200px]">Caricamento...</span>
+        </div>
+        <span id="collapsedEtaText" class="font-extrabold text-[#E30613] text-sm">--</span>
+      </div>
+    </div>
+
+    <!-- Contenuto scrollabile del Bottom Sheet -->
+    <div id="bottomSheetContent" class="space-y-3.5 pr-0.5">
+
+      <!-- 1. SELETTORE DIREZIONE (2 Tab Grandi e Chiare) -->
+      <div class="grid grid-cols-2 gap-2 p-1 bg-slate-100 rounded-2xl">
+        <button id="tabDir0" class="py-2.5 px-3 rounded-xl font-bold text-xs transition flex items-center justify-center gap-1.5 bg-[#E30613] text-white shadow-sm">
+          <span>➔ Montefiore</span>
+        </button>
+        <button id="tabDir1" class="py-2.5 px-3 rounded-xl font-bold text-xs transition flex items-center justify-center gap-1.5 text-slate-600 hover:text-slate-900">
+          <span>➔ Rio Maggiore</span>
+        </button>
+      </div>
+
+      <!-- 2. SELETTORE FERMATA (Select Grande) -->
+      <div>
+        <label for="stopSelect" class="block text-[11px] font-bold uppercase tracking-wider text-slate-400 mb-1 ml-1">Fermata di salita</label>
+        <div class="relative">
+          <select id="stopSelect" class="w-full py-3 pl-3.5 pr-10 bg-slate-50 border border-slate-200 rounded-2xl text-sm font-semibold text-slate-800 focus:outline-none focus:ring-2 focus:ring-[#E30613] appearance-none cursor-pointer">
+            <option value="">Caricamento fermate...</option>
+          </select>
+          <div class="absolute inset-y-0 right-3 flex items-center pointer-events-none text-slate-400">
+            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" /></svg>
+          </div>
+        </div>
+      </div>
+
+      <!-- 3. HERO CARD: PROSSIMO 6 REALE -->
+      <div id="heroCard" class="bg-gradient-to-br from-slate-900 to-slate-800 text-white rounded-3xl p-4 shadow-xl border border-slate-700/50">
+        <!-- Header Hero -->
+        <div class="flex items-center justify-between pb-2 border-b border-slate-700/60 text-xs">
+          <div class="flex items-center gap-1.5">
+            <span class="inline-block w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
+            <span class="font-bold tracking-wide text-slate-300">TEMPO REALE START</span>
+          </div>
+          <span id="heroVehicleBadge" class="px-2 py-0.5 rounded-full text-[10px] font-extrabold bg-slate-700 text-slate-200">
+            Bus --
+          </span>
+        </div>
+
+        <!-- Orario e Minuti in Grande -->
+        <div class="py-3 flex items-baseline justify-between">
+          <div>
+            <div id="heroEtaBig" class="text-3xl font-black tracking-tight text-white">
+              --
+            </div>
+            <div id="heroTimesLine" class="text-xs text-slate-300 mt-1 flex items-center gap-1.5">
+              <span>Previsto: --:--</span>
+            </div>
+          </div>
+          <!-- Badge Cammino -->
+          <div id="heroWalkBadge" class="text-right">
+            <span class="inline-block px-2.5 py-1 rounded-xl text-xs font-bold bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
+              🟢 Ce la fai a piedi
+            </span>
+          </div>
+        </div>
+
+        <!-- Sezione Prossime Corse Compatta -->
+        <div class="pt-2 border-t border-slate-700/60">
+          <div class="text-[10px] uppercase font-bold text-slate-400 mb-1.5">Corse successive oggi</div>
+          <div id="upcomingTripsList" class="space-y-1.5 text-xs">
+            <div class="text-slate-400 text-[11px] py-1">Nessun'altra corsa in programma.</div>
+          </div>
+        </div>
+      </div>
+
+    </div>
+  </aside>
 
   <script>
-(() => {
+    (() => {
       'use strict';
 
-      /* ========================================================================
-         1. FERMATE UFFICIALI LINEA 6 CESENA (Senza linee pretracciate)
-         ======================================================================== */
-      const STOPS_DIR_0 = [
-        { stop_id: 'CE_6001', stop_code: '6001', stop_name: 'Rio Maggiore (Capolinea)', lat: 44.15240, lon: 12.22250, sequence: 1 },
-        { stop_id: 'CE_6003', stop_code: '6003', stop_name: 'Torre del Moro', lat: 44.14635, lon: 12.22695, sequence: 2 },
-        { stop_id: 'CE_6005', stop_code: '6005', stop_name: 'Ippodromo Gramsci', lat: 44.14368, lon: 12.23085, sequence: 3 },
-        { stop_id: 'CE_6006', stop_code: '6006', stop_name: 'Ex Zuccherificio (Via Calvino)', lat: 44.14352, lon: 12.23678, sequence: 4 },
-        { stop_id: 'CE_6007', stop_code: '6007', stop_name: 'Quasimodo (Via S. Quasimodo)', lat: 44.14612, lon: 12.23602, sequence: 5 },
-        { stop_id: 'CE_6008', stop_code: '6008', stop_name: 'Università (Campus Cesena)', lat: 44.14752, lon: 12.23532, sequence: 6 },
-        { stop_id: 'CE_6009', stop_code: '6009', stop_name: 'Saba (Via Umberto Saba)', lat: 44.14458, lon: 12.23818, sequence: 7 },
-        { stop_id: 'CE_6010', stop_code: '6010', stop_name: 'Europa (Architettura / Poste)', lat: 44.14502, lon: 12.24275, sequence: 8 },
-        { stop_id: 'CE_6011', stop_code: '6011', stop_name: 'Cesena Stazione FS', lat: 44.14660, lon: 12.24755, sequence: 9 },
-        { stop_id: 'CE_6014', stop_code: '6014', stop_name: 'Barriera Cavour', lat: 44.13915, lon: 12.24345, sequence: 10 },
-        { stop_id: 'CE_6017', stop_code: '6017', stop_name: 'Viale Mazzoni', lat: 44.13720, lon: 12.24200, sequence: 11 },
-        { stop_id: 'CE_6019', stop_code: '6019', stop_name: 'Ponte Nuovo / Viale Roma', lat: 44.13480, lon: 12.24650, sequence: 12 },
-        { stop_id: 'CE_6021', stop_code: '6021', stop_name: 'Ghirotti Ospedale Bufalini', lat: 44.13280, lon: 12.25360, sequence: 13 },
-        { stop_id: 'CE_6023', stop_code: '6023', stop_name: 'Piazzale Olimpia (Stadio)', lat: 44.13400, lon: 12.25880, sequence: 14 },
-        { stop_id: 'CE_6025', stop_code: '6025', stop_name: 'Montefiore (Capolinea)', lat: 44.13050, lon: 12.26420, sequence: 15 }
-      ];
-
-      const STOPS_DIR_1 = [...STOPS_DIR_0].reverse().map((s, idx) => ({
-        ...s,
-        stop_id: s.stop_id.replace('CE_60', 'CE_61'),
-        sequence: idx + 1
-      }));
-
-      // Punti stradali usati solo come riferimento GPS invisibile (incluse deviazioni lavori stradali)
-      const FREE_GPS_WAYPOINTS_DIR_0 = [
-        [44.15240, 12.22250], [44.15020, 12.22550], [44.14635, 12.22695],
-        [44.14368, 12.23085], [44.14315, 12.23485], [44.14352, 12.23678],
-        [44.14612, 12.23602], [44.14752, 12.23532], [44.14630, 12.23715],
-        [44.14458, 12.23818], [44.14460, 12.24085], [44.14502, 12.24275],
-        [44.14660, 12.24755], [44.14320, 12.24430], [44.13915, 12.24345],
-        [44.13720, 12.24200], [44.13480, 12.24650], [44.13280, 12.25360],
-        [44.13400, 12.25880], [44.13050, 12.26420]
-      ];
-
-      /* ========================================================================
-         2. FUNZIONI GEODESICHE (HAVERSINE & BEARING 2D LIBERO)
-         ======================================================================== */
-      function haversineMeters(lat1, lon1, lat2, lon2) {
-        const R = 6371000;
-        const toRad = d => (d * Math.PI) / 180;
-        const dLat = toRad(lat2 - lat1);
-        const dLon = toRad(lon2 - lon1);
-        const a = Math.sin(dLat / 2) ** 2 +
-                  Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon / 2) ** 2;
-        return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-      }
-
-      function computeBearing(lat1, lon1, lat2, lon2) {
-        const toRad = d => (d * Math.PI) / 180;
-        const toDeg = r => (r * 180) / Math.PI;
-        const dLon = toRad(lon2 - lon1);
-        const y = Math.sin(dLon) * Math.cos(toRad(lat2));
-        const x = Math.cos(toRad(lat1)) * Math.sin(toRad(lat2)) -
-                  Math.sin(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.cos(dLon);
-        return (toDeg(Math.atan2(y, x)) + 360) % 360;
-      }
-
-      function densifyGpsStream(coords, stepMeters = 20) {
-        const out = [];
-        for (let i = 0; i < coords.length - 1; i++) {
-          const p1 = coords[i];
-          const p2 = coords[i + 1];
-          const dist = haversineMeters(p1[0], p1[1], p2[0], p2[1]);
-          const steps = Math.max(1, Math.ceil(dist / stepMeters));
-          for (let s = 0; s < steps; s++) {
-            const t = s / steps;
-            out.push([
-              +(p1[0] + (p2[0] - p1[0]) * t).toFixed(6),
-              +(p1[1] + (p2[1] - p1[1]) * t).toFixed(6)
-            ]);
-          }
-        }
-        out.push(coords[coords.length - 1]);
-        return out;
-      }
-
-      /* ========================================================================
-         3. STATO DELL'APPLICAZIONE (NESSUNA LINEA PRETRACCIATA)
-         ======================================================================== */
-      const CAMPUS_COORDS = { lat: 44.14710, lon: 12.23550, label: 'Campus Universitario' };
-      const STAZIONE_COORDS = { lat: 44.14660, lon: 12.24755, label: 'Cesena Stazione FS' };
-
+      // Stato globale dell'applicazione
       const state = {
         map: null,
-        direction: 0,
-        selectedStopId: 'CE_6008',
-        userPos: { ...CAMPUS_COORDS },
-        walkingMeters: 45,
-        walkingMinutes: 1,
-        followedBusId: null,
-        forceDaySimulation: false,
-        alarmEnabled: false,
-        lastAlertedBusId: null,
-        backendSyncActive: false,
-        lastServerUpdatedAt: null,
-        liveApiVehicles: { 0: [], 1: [] },
-        backendLastSyncMs: 0,
-        pedestrianAbortCtrl: null,
-        pedestrianTimer: null,
-        routes: {
-          0: { stops: STOPS_DIR_0, gpsStream: densifyGpsStream(FREE_GPS_WAYPOINTS_DIR_0, 20) },
-          1: { stops: STOPS_DIR_1, gpsStream: densifyGpsStream([...FREE_GPS_WAYPOINTS_DIR_0].reverse(), 20) }
-        },
-        layers: {
-          walkLine: null,
-          stopsGroup: null,
-          userMarker: null,
-          selectedStopPin: null,
-          busMarkers: new Map()
-        }
+        direction: '0', // '0' = Montefiore, '1' = Rio Maggiore
+        selectedStopId: '6721', // Default Quasimodo (Campus Cesena)
+        staticData: null,
+        liveBuses: [],
+        arrivalsData: null,
+        userPos: null,
+        userMarker: null,
+        userWalkLine: null,
+        stopMarkers: new Map(),
+        busMarkers: new Map(),
+        pollTimer: null,
+        isCollapsed: false
       };
 
-      function getScheduleProfile(nowMs) {
-        const d = new Date(nowMs);
-        const day = d.getDay();
-        const mins = d.getHours() * 60 + d.getMinutes();
-        const isNight = (mins < 360 || mins >= 1245) && !state.forceDaySimulation;
-
-        if (isNight) {
-          return {
-            active: false,
-            headwayMin: 15,
-            busCount: 0,
-            badgeText: '🌙 Servizio terminato (06:00–20:45)',
-            badgeClass: 'text-[10px] font-bold px-2 py-1 rounded-lg bg-slate-800 text-white border border-slate-700'
-          };
-        }
-        if (day === 0) {
-          return {
-            active: true,
-            headwayMin: 28,
-            busCount: 2,
-            badgeText: '🏖️ Festivo (ogni ~28 min)',
-            badgeClass: 'text-[10px] font-bold px-2 py-1 rounded-lg bg-amber-50 text-amber-800 border border-amber-200'
-          };
-        }
-        const isPeak = (mins >= 420 && mins <= 540) || (mins >= 740 && mins <= 870);
-        if (isPeak) {
-          return {
-            active: true,
-            headwayMin: 10,
-            busCount: 3,
-            badgeText: '⚡ Ora di punta (ogni 10 min)',
-            badgeClass: 'text-[10px] font-bold px-2 py-1 rounded-lg bg-emerald-50 text-emerald-800 border border-emerald-200'
-          };
-        }
-        return {
-          active: true,
-          headwayMin: 15,
-          busCount: 3,
-          badgeText: '🕒 Orario feriale (ogni 15 min)',
-          badgeClass: 'text-[10px] font-bold px-2 py-1 rounded-lg bg-slate-100 text-slate-700 border border-slate-200'
-        };
-      }
-
       /* ========================================================================
-         4. SVEGLIA DI PARTENZA ("ESCI ORA")
-         ======================================================================== */
-      function playDepartureChime() {
-        try {
-          const AudioCtx = window.AudioContext || window.webkitAudioContext;
-          if (!AudioCtx) return;
-          const ctx = new AudioCtx();
-          [587.33, 880.0].forEach((freq, idx) => {
-            const osc = ctx.createOscillator();
-            const gain = ctx.createGain();
-            osc.type = 'sine';
-            osc.frequency.setValueAtTime(freq, ctx.currentTime + idx * 0.18);
-            gain.gain.setValueAtTime(0.22, ctx.currentTime + idx * 0.18);
-            gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + idx * 0.18 + 0.45);
-            osc.connect(gain);
-            gain.connect(ctx.destination);
-            osc.start(ctx.currentTime + idx * 0.18);
-            osc.stop(ctx.currentTime + idx * 0.18 + 0.46);
-          });
-        } catch (e) {}
-      }
-
-      function triggerDepartureAlert(arrival) {
-        if (!state.alarmEnabled || !arrival) return;
-        const alertKey = `${arrival.busId}_${state.selectedStopId}`;
-        if (state.lastAlertedBusId === alertKey) return;
-        state.lastAlertedBusId = alertKey;
-
-        playDepartureChime();
-
-        const banner = document.getElementById('alarmAlertBanner');
-        const text = document.getElementById('alarmAlertText');
-        if (banner && text) {
-          text.textContent = `🚨 ESCI ORA! Linea 6 tra ${arrival.etaMinutes} min (${state.walkingMinutes} min a piedi)`;
-          banner.classList.remove('hidden');
-          banner.classList.add('flex');
-        }
-      }
-
-      /* ========================================================================
-         5. INIZIALIZZAZIONE MAPPA (SOLO FERMATE E BUS LIBERI SULLA STRADA)
+         1. INIZIALIZZAZIONE MAPPA LEAFLET
          ======================================================================== */
       function initMap() {
+        // Centro predefinito Cesena (Campus / Quasimodo)
+        const DEFAULT_CENTER = [44.1450, 12.2380];
         state.map = L.map('map', {
-          center: [44.1462, 12.2375],
-          zoom: 15,
-          zoomControl: false
-        });
+          zoomControl: false,
+          attributionControl: false
+        }).setView(DEFAULT_CENTER, 14);
 
-        L.control.zoom({ position: 'topright' }).addTo(state.map);
-
-        L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        // OpenStreetMap Tile Layer pulito
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
           maxZoom: 19,
-          className: 'gmaps-tiles',
-          attribution: '&copy; OpenStreetMap'
+          crossOrigin: true
         }).addTo(state.map);
 
-        state.layers.walkLine = L.layerGroup().addTo(state.map);
-        state.layers.stopsGroup = L.layerGroup().addTo(state.map);
+        // Gruppi di livelli
+        state.stopsGroup = L.layerGroup().addTo(state.map);
+        state.busesGroup = L.layerGroup().addTo(state.map);
 
-        // Aggiorna badge modalità GPS libera (senza linee pretracciate)
-        const badge = document.getElementById('roadGeometryStatus');
-        if (badge) {
-          badge.textContent = 'GPS Libero (No Linee)';
-          badge.className = 'text-[10px] font-semibold text-slate-700 bg-slate-100 px-2 py-1 rounded-lg border border-slate-200 shrink-0';
-        }
-
-        state.map.on('click', (e) => {
-          setUserPosition(e.latlng.lat, e.latlng.lng, 'Punto scelto sulla mappa', true);
-        });
-
-        setTimeout(() => state.map.invalidateSize(), 150);
+        // Geolocation browser / iPhone
+        initUserLocation();
       }
 
       /* ========================================================================
-         6. PERCORSO PEDONALE UTENTE -> FERMATA
+         2. LOCALIZZAZIONE UTENTE
          ======================================================================== */
-      function updatePedestrianPath(userLat, userLon, stop) {
-        const straightDist = haversineMeters(userLat, userLon, stop.lat, stop.lon);
-        state.walkingMeters = Math.round(straightDist * 1.15);
-        state.walkingMinutes = state.walkingMeters < 60 ? 1 : Math.round(state.walkingMeters / 78);
+      function initUserLocation() {
+        if (!('geolocation' in navigator)) return;
 
-        const walkText = document.getElementById('walkText');
-        const walkModeBadge = document.getElementById('walkModeBadge');
-        if (walkText) {
-          walkText.innerHTML = `📍 <strong>${state.userPos.label}</strong>: <strong>${state.walkingMeters}m</strong> da ${stop.stop_name} (~${state.walkingMinutes} min)`;
-        }
-        if (walkModeBadge) walkModeBadge.textContent = 'A piedi';
-
-        state.layers.walkLine.clearLayers();
-        L.polyline([[userLat, userLon], [stop.lat, stop.lon]], {
-          color: '#1A73E8',
-          weight: 3,
-          dashArray: '4, 7',
-          opacity: 0.75
-        }).addTo(state.layers.walkLine);
-
-        if (state.pedestrianTimer) clearTimeout(state.pedestrianTimer);
-        state.pedestrianTimer = setTimeout(async () => {
-          try {
-            if (state.pedestrianAbortCtrl) state.pedestrianAbortCtrl.abort();
-            state.pedestrianAbortCtrl = new AbortController();
-
-            const url = `https://router.project-osrm.org/route/v1/foot/${userLon},${userLat};${stop.lon},${stop.lat}?overview=full&geometries=geojson`;
-            const res = await fetch(url, { signal: state.pedestrianAbortCtrl.signal });
-            if (!res.ok) return;
-            const data = await res.json();
-            const route = data.routes?.[0];
-            if (route && route.geometry?.coordinates?.length > 1) {
-              const footCoords = route.geometry.coordinates.map(([lon, lat]) => [lat, lon]);
-              state.walkingMeters = Math.round(route.distance);
-              state.walkingMinutes = state.walkingMeters < 60 ? 1 : Math.round(state.walkingMeters / 78);
-
-              state.layers.walkLine.clearLayers();
-              L.polyline([[userLat, userLon], ...footCoords, [stop.lat, stop.lon]], {
-                color: '#1A73E8',
-                weight: 3,
-                dashArray: '5, 7',
-                opacity: 0.85
-              }).addTo(state.layers.walkLine);
-
-              if (walkText) {
-                walkText.innerHTML = `🚶 <strong>${state.userPos.label}</strong>: <strong>${state.walkingMeters}m</strong> reali (~${state.walkingMinutes} min a piedi)`;
-              }
-              if (walkModeBadge) walkModeBadge.textContent = 'Vialetti OSM';
-              lastUiRenderSec = -1;
+        navigator.geolocation.getCurrentPosition(
+          (pos) => {
+            const { latitude, longitude, accuracy } = pos.coords;
+            // Se accuratezza > 400m (tipico IP desktop o proxy), non forzare posizione fasulla
+            if (accuracy <= 400) {
+              updateUserLocation(latitude, longitude);
+              autoSelectNearestStop(latitude, longitude);
             }
-          } catch (e) {}
-        }, 220);
+          },
+          (err) => console.log('Geolocalizzazione non attiva o negata:', err.message),
+          { enableHighAccuracy: true, timeout: 6000 }
+        );
       }
 
-      /* ========================================================================
-         7. DISEGNO SOLE FERMATE (ZERO LINEE AZZURRE PRETRACCIATE)
-         ======================================================================== */
-      function renderDirectionStopsOnly() {
-        state.layers.stopsGroup.clearLayers();
-        const stops = state.routes[state.direction].stops;
+      function updateUserLocation(lat, lon) {
+        state.userPos = { lat, lon };
 
-        stops.forEach((stop, idx) => {
-          const isTerminus = idx === 0 || idx === stops.length - 1;
-          const isCampus = stop.stop_name.toLowerCase().includes('universit') || stop.stop_name.toLowerCase().includes('quasimodo');
-
-          const marker = L.circleMarker([stop.lat, stop.lon], {
-            radius: isTerminus ? 6.5 : (isCampus ? 6 : 5),
-            fillColor: isTerminus ? '#1A73E8' : '#FFFFFF',
-            color: isCampus ? '#E30613' : '#1A73E8',
-            weight: 2.5,
-            fillOpacity: 1
+        if (!state.userMarker) {
+          const userIcon = L.divIcon({
+            className: 'user-dot-container',
+            html: '<div class="user-dot-wrap"></div>',
+            iconSize: [18, 18],
+            iconAnchor: [9, 9]
           });
-
-          marker.bindTooltip(`🚏 ${stop.stop_name} (#${stop.stop_code})`, {
-            direction: 'top',
-            offset: [0, -6],
-            className: 'clean-stop-tooltip'
-          });
-
-          marker.on('click', (ev) => {
-            L.DomEvent.stopPropagation(ev);
-            selectStopById(stop.stop_id, true);
-          });
-
-          marker.addTo(state.layers.stopsGroup);
-        });
-      }
-
-      function renderUserMarker() {
-        if (!state.layers.userMarker) {
-          const icon = L.divIcon({
-            className: '',
-            iconSize: [22, 22],
-            iconAnchor: [11, 11],
-            html: `
-              <div class="user-blue-dot-wrapper" title="La tua posizione (trascinami)">
-                <div class="user-blue-halo"></div>
-                <div class="user-blue-core"></div>
-              </div>
-            `
-          });
-
-          state.layers.userMarker = L.marker([state.userPos.lat, state.userPos.lon], {
-            icon,
-            draggable: true,
-            zIndexOffset: 2000
-          }).addTo(state.map);
-
-          state.layers.userMarker.on('dragend', (e) => {
-            const pos = e.target.getLatLng();
-            setUserPosition(pos.lat, pos.lng, 'Posizione personalizzata', true);
-          });
+          state.userMarker = L.marker([lat, lon], { icon: userIcon, zIndexOffset: 1000 }).addTo(state.map);
         } else {
-          state.layers.userMarker.setLatLng([state.userPos.lat, state.userPos.lon]);
+          state.userMarker.setLatLng([lat, lon]);
+        }
+
+        updateWalkPathToSelectedStop();
+      }
+
+      function autoSelectNearestStop(userLat, userLon) {
+        if (!state.staticData) return;
+        const currentStops = state.staticData.routes_by_direction?.[state.direction]?.stops || [];
+        if (!currentStops.length) return;
+
+        let closest = currentStops[0];
+        let minDist = Infinity;
+        for (const s of currentStops) {
+          const d = Math.hypot(s.lat - userLat, s.lon - userLon);
+          if (d < minDist) {
+            minDist = d;
+            closest = s;
+          }
+        }
+
+        if (closest && closest.stop_id !== state.selectedStopId) {
+          state.selectedStopId = closest.stop_id;
+          const sel = document.getElementById('stopSelect');
+          if (sel) sel.value = closest.stop_id;
+          renderStopsOnMap();
+          fetchArrivalsForStop();
         }
       }
 
-      function setUserPosition(lat, lon, label, autoSelectNearestStop = true) {
-        state.userPos = { lat, lon, label };
-        renderUserMarker();
-
-        const stops = state.routes[state.direction].stops;
-        if (autoSelectNearestStop) {
-          let nearest = stops[0];
-          let minD = Infinity;
-          stops.forEach(s => {
-            const d = haversineMeters(lat, lon, s.lat, s.lon);
-            if (d < minD) {
-              minD = d;
-              nearest = s;
-            }
-          });
-          state.selectedStopId = nearest.stop_id;
-          const selectEl = document.getElementById('stopSelect');
-          if (selectEl) selectEl.value = nearest.stop_id;
+      function updateWalkPathToSelectedStop() {
+        if (state.userWalkLine) {
+          state.map.removeLayer(state.userWalkLine);
+          state.userWalkLine = null;
         }
 
-        try {
-          localStorage.setItem('linea6_prefs', JSON.stringify({
-            direction: state.direction,
-            selectedStopId: state.selectedStopId,
-            userPos: state.userPos,
-            savedAt: Date.now()
-          }));
-        } catch (e) {}
-
-        updateUserAndStopRelation(false);
-      }
-
-      function selectStopById(stopId, panToStop = false) {
-        state.selectedStopId = stopId;
-        state.lastAlertedBusId = null;
-        const selectEl = document.getElementById('stopSelect');
-        if (selectEl) selectEl.value = stopId;
-        updateUserAndStopRelation(panToStop);
-      }
-
-      function updateUserAndStopRelation(panToStop = false) {
-        const stops = state.routes[state.direction].stops;
-        const stop = stops.find(s => s.stop_id === state.selectedStopId) || stops[0];
+        if (!state.userPos || !state.selectedStopId || !state.staticData) return;
+        const currentStops = state.staticData.routes_by_direction?.[state.direction]?.stops || [];
+        const stop = currentStops.find(s => String(s.stop_id) === String(state.selectedStopId));
         if (!stop) return;
 
-        updatePedestrianPath(state.userPos.lat, state.userPos.lon, stop);
-
-        if (state.layers.selectedStopPin) {
-          state.map.removeLayer(state.layers.selectedStopPin);
-        }
-        const pinIcon = L.divIcon({
-          className: '',
-          iconSize: [200, 44],
-          iconAnchor: [100, 38],
-          html: `
-            <div class="selected-stop-wrapper">
-              <div class="selected-stop-label">🚏 ${stop.stop_name}</div>
-              <div class="selected-stop-dot"></div>
-            </div>
-          `
-        });
-        state.layers.selectedStopPin = L.marker([stop.lat, stop.lon], {
-          icon: pinIcon,
-          zIndexOffset: 1500
+        // Tratteggio pedonale discreto
+        state.userWalkLine = L.polyline([[state.userPos.lat, state.userPos.lon], [stop.lat, stop.lon]], {
+          color: '#2563EB',
+          weight: 3,
+          dashArray: '5, 8',
+          opacity: 0.7
         }).addTo(state.map);
-
-        if (panToStop && state.map) {
-          state.map.panTo([stop.lat, stop.lon], { animate: true });
-        }
       }
 
       /* ========================================================================
-         8. TRACKING GPS 2D LIBERO (SENZA SNAP SU POLILINEE PRETRACCIATE)
+         3. CARICAMENTO DATI STATICI DA API
          ======================================================================== */
-      // Trova la fermata superata più vicina alla posizione GPS libera dell'autobus
-      function findClosestStopIndex(lat, lon, stops) {
-        let bestIdx = 0;
-        let minD = Infinity;
-        stops.forEach((s, idx) => {
-          const d = haversineMeters(lat, lon, s.lat, s.lon);
-          if (d < minD) {
-            minD = d;
-            bestIdx = idx;
-          }
-        });
-        return { index: bestIdx, distanceMeters: minD };
-      }
-
-      async function pollBackendLiveApi() {
+      async function loadStaticStops() {
         try {
-          const ctrl = new AbortController();
-          const timer = setTimeout(() => ctrl.abort(), 2200);
-          const res = await fetch('/api/linea6/live', { signal: ctrl.signal });
-          clearTimeout(timer);
-          if (!res.ok) return;
+          const res = await fetch('/api/linea6/static');
           const data = await res.json();
+          state.staticData = data;
 
-          // Ignora il simulatore interno con cache a 30s per evitare salti all'indietro
-          if (!data.source || data.source.includes('simulator') || data.source.includes('interpolator')) {
-            state.backendSyncActive = false;
-            return;
-          }
-
-          if (data.updated_at && data.updated_at === state.lastServerUpdatedAt) {
-            return;
-          }
-          state.lastServerUpdatedAt = data.updated_at;
-
-          if (!Array.isArray(data.buses) || data.buses.length === 0) return;
-
-          const byDir = { 0: [], 1: [] };
-          data.buses.forEach((b, idx) => {
-            const dId = Number(b.direction_id ?? b.direction ?? 0) === 1 ? 1 : 0;
-            // USA LE COORDINATE GPS GREZZE LIBERE (anche se fuori rotta per deviazioni/lavori!)
-            byDir[dId].push({
-              id: b.id || b.bus_id || `API-BUS-${idx}`,
-              label: b.vehicle_label || `Start Romagna ${601 + idx}`,
-              lat: Number(b.lat),
-              lon: Number(b.lon),
-              bearing: Number(b.bearing || 0),
-              speedKmh: Number(b.speed_kmh || 24)
-            });
-          });
-
-          state.liveApiVehicles = byDir;
-          state.backendLastSyncMs = Date.now();
-          state.backendSyncActive = true;
-        } catch (e) {
-          state.backendSyncActive = false;
+          renderStopSelectOptions();
+          renderStopsOnMap();
+          fetchArrivalsForStop();
+          fetchLiveBuses();
+        } catch (err) {
+          console.error('Errore caricamento dati statici:', err);
         }
       }
 
-      function computeLiveBusesForDirection(dirId, nowMs, schedule) {
-        if (!schedule.active) return [];
+      function renderStopSelectOptions() {
+        const sel = document.getElementById('stopSelect');
+        if (!sel || !state.staticData) return;
 
-        const routeObj = state.routes[dirId];
-        const stops = routeObj.stops;
-        const pts = routeObj.gpsStream;
-        const totalPts = pts.length;
-        const tripDurationSec = 1440; // 24 min
-        const nowSec = nowMs / 1000;
+        const stops = state.staticData.routes_by_direction?.[state.direction]?.stops || [];
+        sel.innerHTML = stops.map(s => `
+          <option value="${s.stop_id}" ${String(s.stop_id) === String(state.selectedStopId) ? 'selected' : ''}>
+            ${s.stop_name} (#${s.stop_id})
+          </option>
+        `).join('');
 
-        // 1. Se ci sono coordinate GPS raw da API esterna, muovi liberamente in 2D (Dead Reckoning)
-        const rawVehicles = (state.backendSyncActive && (nowMs - state.backendLastSyncMs < 35000) && state.liveApiVehicles[dirId]?.length)
-          ? state.liveApiVehicles[dirId]
-          : null;
-
-        if (rawVehicles) {
-          const dtSec = Math.min(30, (nowMs - state.backendLastSyncMs) / 1000);
-          return rawVehicles.map(v => {
-            // Avanzamento predittivo lungo il vettore bussola reale (bearing)
-            const speedMps = (v.speedKmh || 20) / 3.6;
-            const distM = speedMps * dtSec * 0.5;
-            const rad = (v.bearing * Math.PI) / 180;
-            const dLat = (distM * Math.cos(rad)) / 111320;
-            const dLon = (distM * Math.sin(rad)) / (111320 * Math.cos((v.lat * Math.PI) / 180));
-            const lat = v.lat + dLat;
-            const lon = v.lon + dLon;
-
-            const closest = findClosestStopIndex(lat, lon, stops);
-            const nextIdx = Math.min(closest.index + 1, stops.length - 1);
-
-            return {
-              id: v.id,
-              label: v.label,
-              direction: dirId,
-              destination: dirId === 0 ? 'Montefiore' : 'Rio Maggiore',
-              lat,
-              lon,
-              bearing: v.bearing,
-              status: closest.distanceMeters < 28 ? 'STOPPED_AT' : 'IN_TRANSIT_TO',
-              currentStopIndex: closest.index,
-              nextStopIndex: nextIdx,
-              currentStop: stops[closest.index],
-              nextStop: stops[nextIdx]
-            };
-          });
+        // Se la fermata precedentemente selezionata non esiste in questa direzione, prendi la prima
+        if (!stops.some(s => String(s.stop_id) === String(state.selectedStopId)) && stops.length > 0) {
+          state.selectedStopId = stops[0].stop_id;
+          sel.value = stops[0].stop_id;
         }
 
-        // 2. Flusso GPS continuo su strada (senza alcuna linea disegnata sulla mappa)
-        const buses = [];
-        const headwaySec = schedule.headwayMin * 60;
-
-        for (let idx = 0; idx < schedule.busCount; idx++) {
-          const offsetSec = idx * headwaySec;
-          const cyclePos = ((nowSec + offsetSec) % tripDurationSec) / tripDurationSec;
-          const exactPt = cyclePos * (totalPts - 1);
-          const pIdx = Math.min(Math.floor(exactPt), totalPts - 2);
-          const frac = exactPt - pIdx;
-
-          const pA = pts[pIdx];
-          const pB = pts[pIdx + 1];
-          const lat = pA[0] + (pB[0] - pA[0]) * frac;
-          const lon = pA[1] + (pB[1] - pA[1]) * frac;
-          const bearing = computeBearing(pA[0], pA[1], pB[0], pB[1]);
-
-          const closest = findClosestStopIndex(lat, lon, stops);
-          const nextIdx = Math.min(closest.index + 1, stops.length - 1);
-
-          buses.push({
-            id: `CE-60${idx + 1}-D${dirId}`,
-            label: `Start Romagna ${601 + idx + dirId * 10}`,
-            direction: dirId,
-            destination: dirId === 0 ? 'Montefiore' : 'Rio Maggiore',
-            lat,
-            lon,
-            bearing,
-            status: closest.distanceMeters < 25 ? 'STOPPED_AT' : 'IN_TRANSIT_TO',
-            currentStopIndex: closest.index,
-            nextStopIndex: nextIdx,
-            currentStop: stops[closest.index],
-            nextStop: stops[nextIdx]
-          });
-        }
-
-        return buses;
-      }
-
-      // Calcola l'arrivo basandosi sulla distanza reale (funziona anche se il bus è in deviazione!)
-      function computeArrivalsForSelectedStop(liveBuses, nowMs, schedule) {
-        const stops = state.routes[state.direction].stops;
-        const userStopIdx = stops.findIndex(s => s.stop_id === state.selectedStopId);
-        const targetStop = stops[userStopIdx >= 0 ? userStopIdx : 0];
-
-        const arrivals = [];
-
-        if (schedule.active) {
-          liveBuses.forEach(bus => {
-            if (bus.currentStopIndex <= (userStopIdx >= 0 ? userStopIdx : 0)) {
-              // Distanza reale in metri (con coefficiente stradale urbano 1.28x, anche su deviazioni)
-              const straightM = haversineMeters(bus.lat, bus.lon, targetStop.lat, targetStop.lon);
-              const roadDistanceM = straightM * 1.28;
-              // Velocità media commerciale urbana ~22 km/h (6.1 m/s)
-              const etaSeconds = Math.round(roadDistanceM / 6.1);
-              const etaMinutes = Math.max(0, Math.round(etaSeconds / 60));
-              const stopsAway = Math.max(0, (userStopIdx >= 0 ? userStopIdx : 0) - bus.currentStopIndex);
-
-              arrivals.push({
-                busId: bus.id,
-                vehicleLabel: bus.label,
-                destination: bus.destination,
-                isLive: true,
-                etaSeconds,
-                etaMinutes,
-                stopsAway,
-                bus
-              });
-            }
-          });
-
-          arrivals.sort((a, b) => a.etaSeconds - b.etaSeconds);
-        }
-
-        let lastEtaMin = arrivals.length > 0 ? arrivals[arrivals.length - 1].etaMinutes : 4;
-        while (arrivals.length < 4) {
-          lastEtaMin += schedule.headwayMin;
-          arrivals.push({
-            busId: null,
-            vehicleLabel: 'Corsa Start Romagna',
-            destination: state.direction === 0 ? 'Montefiore' : 'Rio Maggiore',
-            isLive: false,
-            etaSeconds: lastEtaMin * 60,
-            etaMinutes: lastEtaMin,
-            stopsAway: Math.max(2, userStopIdx)
-          });
-        }
-
-        arrivals.forEach(arr => {
-          const arrivalDate = new Date(nowMs + arr.etaSeconds * 1000);
-          arr.clockTime = arrivalDate.toLocaleTimeString('it-IT', { hour: '2-digit', minute: '2-digit' });
-
-          const margin = arr.etaMinutes - state.walkingMinutes;
-          if (margin >= 2) {
-            arr.catchState = {
-              code: 'EASY',
-              bg: 'bg-emerald-50 border-emerald-200 text-emerald-800',
-              badge: `🟢 Sì, fai in tempo a piedi (+${margin} min di margine)`
-            };
-          } else if (margin >= 0) {
-            arr.catchState = {
-              code: 'HURRY',
-              bg: 'bg-amber-50 border-amber-200 text-amber-800',
-              badge: `🟡 Esci subito! Hai solo ${margin} min di margine`
-            };
-          } else {
-            arr.catchState = {
-              code: 'MISSED',
-              bg: 'bg-rose-50 border-rose-200 text-rose-800',
-              badge: `🔴 Troppo vicino (${arr.etaMinutes} min vs ${state.walkingMinutes} min a piedi) • Punta al successivo`
-            };
-          }
-        });
-
-        const firstCatchable = arrivals.find(a => a.etaMinutes >= state.walkingMinutes);
-        if (schedule.active && state.alarmEnabled && firstCatchable) {
-          const margin = firstCatchable.etaMinutes - state.walkingMinutes;
-          if (margin <= 2 && margin >= 0) {
-            triggerDepartureAlert(firstCatchable);
-          }
-        }
-
-        return { targetStop, arrivals };
+        updateCollapsedSummary();
       }
 
       /* ========================================================================
-         9. RENDERING SOLO MARKER AUTOBUS (ZERO POLILINEE BLU/AZZURRE)
+         4. DISEGNO FERMATE SULLA MAPPA (ZERO LINEE AZZURRE PRETRACCIATE)
          ======================================================================== */
-      function updateMapBusesOnly(liveBuses, arrivalsInfo) {
-        const primaryBusId = arrivalsInfo.arrivals[0]?.busId || null;
-        const activeIds = new Set(liveBuses.map(b => b.id));
+      function renderStopsOnMap() {
+        state.stopsGroup.clearLayers();
+        if (!state.staticData) return;
 
-        for (const [id, marker] of state.layers.busMarkers.entries()) {
-          if (!activeIds.has(id)) {
-            state.map.removeLayer(marker);
-            state.layers.busMarkers.delete(id);
-          }
-        }
+        const stops = state.staticData.routes_by_direction?.[state.direction]?.stops || [];
+        stops.forEach(s => {
+          const isSelected = String(s.stop_id) === String(state.selectedStopId);
 
-        liveBuses.forEach(bus => {
-          const isPrimary = bus.id === primaryBusId;
-          const matchingArrival = arrivalsInfo.arrivals.find(a => a.busId === bus.id);
-          const pillText = matchingArrival
-            ? (matchingArrival.etaMinutes <= 0 ? 'Bus 6 • In arrivo' : `Bus 6 • a ${matchingArrival.etaMinutes} min da te`)
-            : `Bus 6 ➔ ${bus.nextStop.stop_name.split(' ')[0]}`;
-
-          let marker = state.layers.busMarkers.get(bus.id);
-          if (!marker) {
-            const icon = L.divIcon({
-              className: '',
-              iconSize: [46, 46],
-              iconAnchor: [23, 23],
-              html: `
-                <div class="bus-live-wrapper">
-                  <div class="bus-radar-wave"></div>
-                  <div class="bus-compass-ring" style="transform: rotate(${bus.bearing.toFixed(1)}deg)">
-                    <div class="bus-heading-arrow"></div>
-                  </div>
-                  <div class="bus-circle-body ${isPrimary ? 'is-primary' : ''}">6</div>
-                  <div class="bus-pill-tag">${pillText}</div>
-                </div>
-              `
+          if (isSelected) {
+            const stopIcon = L.divIcon({
+              className: 'stop-selected-container',
+              html: '<div class="stop-selected-pulse"></div>',
+              iconSize: [22, 22],
+              iconAnchor: [11, 11]
             });
-
-            marker = L.marker([bus.lat, bus.lon], {
-              icon,
-              zIndexOffset: isPrimary ? 1800 : 1200
-            }).addTo(state.map);
-
-            marker.on('click', () => {
-              state.followedBusId = bus.id;
-              state.map.flyTo([bus.lat, bus.lon], 16, { duration: 0.6 });
-            });
-
-            state.layers.busMarkers.set(bus.id, marker);
+            const marker = L.marker([s.lat, s.lon], { icon: stopIcon, zIndexOffset: 500 });
+            marker.on('click', () => selectStop(s.stop_id));
+            marker.addTo(state.stopsGroup);
           } else {
-            marker.setLatLng([bus.lat, bus.lon]);
-            const el = marker.getElement();
-            if (el) {
-              const ring = el.querySelector('.bus-compass-ring');
-              if (ring) ring.style.transform = `rotate(${bus.bearing.toFixed(1)}deg)`;
-              const body = el.querySelector('.bus-circle-body');
-              if (body) body.className = `bus-circle-body ${isPrimary ? 'is-primary' : ''}`;
-              const tag = el.querySelector('.bus-pill-tag');
-              if (tag && tag.textContent !== pillText) tag.textContent = pillText;
-            }
-          }
-
-          if (state.followedBusId === bus.id) {
-            state.map.panTo([bus.lat, bus.lon], { animate: false });
+            // Cerchietto bianco discreto
+            const circle = L.circleMarker([s.lat, s.lon], {
+              radius: 5,
+              fillColor: '#ffffff',
+              color: '#475569',
+              weight: 2,
+              fillOpacity: 1
+            });
+            circle.bindTooltip(`${s.stop_name}`, { direction: 'top', offset: [0, -6] });
+            circle.on('click', () => selectStop(s.stop_id));
+            circle.addTo(state.stopsGroup);
           }
         });
+
+        updateWalkPathToSelectedStop();
       }
 
-      let lastUiRenderSec = -1;
+      function selectStop(stopId) {
+        state.selectedStopId = String(stopId);
+        const sel = document.getElementById('stopSelect');
+        if (sel) sel.value = stopId;
+        renderStopsOnMap();
+        fetchArrivalsForStop();
+      }
 
-      function updatePassengerCardUI(arrivalsInfo, nowMs, schedule) {
-        const nowSec = Math.floor(nowMs / 1000);
-        if (nowSec === lastUiRenderSec) return;
-        lastUiRenderSec = nowSec;
+      /* ========================================================================
+         5. FETCH ARRIVI IN TEMPO REALE (/api/linea6/arrivals)
+         ======================================================================== */
+      async function fetchArrivalsForStop() {
+        if (!state.selectedStopId) return;
 
-        const clockEl = document.getElementById('liveClock');
-        if (clockEl) {
-          clockEl.textContent = new Date(nowMs).toLocaleTimeString('it-IT', {
-            hour: '2-digit',
-            minute: '2-digit',
-            second: '2-digit'
-          });
+        let url = `/api/linea6/arrivals?stop_id=${state.selectedStopId}&direction=${state.direction}`;
+        if (state.userPos) {
+          url += `&user_lat=${state.userPos.lat}&user_lon=${state.userPos.lon}`;
         }
 
-        const schedBadge = document.getElementById('scheduleBadge');
-        if (schedBadge) {
-          schedBadge.textContent = schedule.badgeText;
-          schedBadge.className = schedule.badgeClass;
+        try {
+          const res = await fetch(url);
+          const data = await res.json();
+          state.arrivalsData = data;
+          updateHeroArrivalUI(data);
+        } catch (err) {
+          console.error('Errore fetch arrivals:', err);
+        }
+      }
+
+      function updateHeroArrivalUI(data) {
+        const arrivals = data?.arrivals || [];
+        const heroEta = document.getElementById('heroEtaBig');
+        const heroTimes = document.getElementById('heroTimesLine');
+        const heroVehicle = document.getElementById('heroVehicleBadge');
+        const heroWalk = document.getElementById('heroWalkBadge');
+        const upcomingList = document.getElementById('upcomingTripsList');
+
+        updateCollapsedSummary();
+
+        if (!arrivals.length) {
+          // ZERO SIMULATORI: Messaggio onesto
+          heroEta.textContent = 'Nessun bus';
+          heroTimes.innerHTML = `<span class="text-amber-300 font-semibold">Nessun autobus Linea 6 in arrivo al momento</span>`;
+          heroVehicle.textContent = 'Fuori servizio';
+          heroWalk.innerHTML = `<span class="px-2.5 py-1 rounded-xl text-xs font-bold bg-slate-700 text-slate-300">Servizio 06:00 - 20:30</span>`;
+          upcomingList.innerHTML = `<div class="text-slate-400 text-xs py-1">Nessuna corsa attiva programmata nelle prossime ore.</div>`;
+          return;
         }
 
-        const nightBanner = document.getElementById('nightServiceBanner');
-        if (nightBanner) {
-          nightBanner.classList.toggle('hidden', schedule.active);
-        }
+        // Prima corsa in arrivo
+        const first = arrivals[0];
+        const isCancelled = first.is_cancelled;
+        const eta = first.eta_minutes;
 
-        const first = arrivalsInfo.arrivals[0];
-        const heroBox = document.getElementById('heroArrivalBox');
-        if (heroBox && first) {
-          const etaLabel = !schedule.active
-            ? 'Domani 06:05'
-            : (first.etaMinutes <= 0 ? 'In arrivo ora' : `tra ${first.etaMinutes} min`);
+        // Matricola Bus
+        heroVehicle.textContent = first.vehicle_id ? `Bus #${first.vehicle_id}` : `Corsa ${first.trip_id}`;
 
-          const subStatus = !schedule.active
-            ? '🌙 Nessun bus notturno in circolazione • Premi "Simula Diurno" per testare la mappa'
-            : (first.isLive
-                ? `<span class="text-emerald-600 font-bold">((•)) POSIZIONE LIBERA</span> • a <strong>${first.stopsAway} fermate</strong> da te (zona <em>${first.bus.currentStop.stop_name}</em>)`
-                : `📅 Corsa programmata da orario Start Romagna • a ${first.stopsAway} fermate da te`);
+        if (isCancelled) {
+          heroEta.textContent = 'SOPPRESSA';
+          heroEta.className = 'text-2xl font-black text-rose-400 tracking-tight';
+          heroTimes.innerHTML = `<span class="text-rose-300 font-bold">⚠️ Corsa ${first.scheduled_time} annullata</span>`;
+        } else if (eta <= 0) {
+          heroEta.textContent = 'In arrivo';
+          heroEta.className = 'text-3xl font-black text-emerald-400 tracking-tight animate-pulse';
+          heroTimes.innerHTML = `<span>Orario: <strong class="text-white">${first.live_time}</strong></span>`;
+        } else {
+          heroEta.textContent = `tra ${eta} min`;
+          heroEta.className = 'text-3xl font-black text-white tracking-tight';
 
-          heroBox.innerHTML = `
-            <div class="flex items-baseline justify-between">
-              <div class="text-3xl font-black text-slate-900 tracking-tight">${etaLabel}</div>
-              <div class="text-xs font-bold text-slate-500 bg-white px-2.5 py-1 rounded-lg border border-slate-200">
-                ore ${schedule.active ? first.clockTime : '06:05'}
-              </div>
-            </div>
-            <div class="text-xs text-slate-600 mt-1.5 leading-snug">
-              ${subStatus}
-            </div>
-            <div class="mt-2.5 px-3 py-2 rounded-xl border text-xs font-bold ${first.catchState.bg}">
-              ${first.catchState.badge}
-            </div>
-            <button id="btnFocusPrimaryBus" type="button" class="mt-2.5 w-full py-2 px-3 rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-xs font-bold flex items-center justify-center gap-1.5 transition shadow-sm">
-              <span>🚌</span> Centra questo autobus sulla mappa
-            </button>
-          `;
-
-          const btnFocus = document.getElementById('btnFocusPrimaryBus');
-          if (btnFocus) {
-            btnFocus.onclick = () => {
-              if (first.bus) {
-                state.followedBusId = first.bus.id;
-                state.map.flyTo([first.bus.lat, first.bus.lon], 16, { duration: 0.7 });
-              } else {
-                state.map.flyTo([arrivalsInfo.targetStop.lat, arrivalsInfo.targetStop.lon], 16, { duration: 0.7 });
-              }
-            };
+          let timeHtml = `<span>Arrivo: <strong class="text-white">${first.live_time}</strong></span>`;
+          if (first.delay_minutes > 1) {
+            timeHtml += ` <span class="text-rose-400 font-bold ml-1">+${first.delay_minutes} min</span>`;
+          } else if (first.delay_minutes < -1) {
+            timeHtml += ` <span class="text-emerald-400 font-bold ml-1">${first.delay_minutes} min</span>`;
           }
+          heroTimes.innerHTML = timeHtml;
         }
 
-        const subList = document.getElementById('subsequentBusesList');
-        if (subList) {
-          const nextThree = arrivalsInfo.arrivals.slice(1, 4);
-          subList.innerHTML = nextThree.map(item => `
-            <div data-bus-id="${item.busId || ''}" class="sub-bus-row flex items-center justify-between px-3 py-2 rounded-xl bg-slate-50 hover:bg-slate-100 border border-slate-200/70 cursor-pointer transition">
+        // Stato cammino passeggero
+        const walkMin = first.walking_minutes || 1;
+        if (first.can_catch) {
+          heroWalk.innerHTML = `
+            <span class="inline-block px-2.5 py-1 rounded-xl text-xs font-bold bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
+              🟢 Ce la fai (${walkMin} min a piedi)
+            </span>
+          `;
+        } else {
+          heroWalk.innerHTML = `
+            <span class="inline-block px-2.5 py-1 rounded-xl text-xs font-bold bg-rose-500/20 text-rose-300 border border-rose-500/30">
+              🔴 Troppo vicino (${walkMin} min a piedi)
+            </span>
+          `;
+        }
+
+        // Corse successive
+        const subsequent = arrivals.slice(1, 4);
+        if (subsequent.length > 0) {
+          upcomingList.innerHTML = subsequent.map(arr => `
+            <div class="flex items-center justify-between py-1 border-b border-slate-800 last:border-0 text-slate-300">
               <div class="flex items-center gap-2">
-                <span class="w-5 h-5 rounded-md bg-blue-600 text-white text-[11px] font-extrabold flex items-center justify-center">6</span>
-                <div>
-                  <div class="text-xs font-bold text-slate-800">➔ ${item.destination}</div>
-                  <div class="text-[10px] text-slate-500">
-                    ${item.isLive ? '🟢 GPS Live in strada' : '🕒 Corsa da orario'} • ${item.catchState.code === 'EASY' ? 'Fai in tempo comodamente' : 'In orario'}
-                  </div>
-                </div>
+                <span class="font-bold text-white">${arr.live_time}</span>
+                <span class="text-slate-400 text-[11px]">${arr.vehicle_id ? `#${arr.vehicle_id}` : ''}</span>
               </div>
-              <div class="text-right">
-                <div class="text-xs font-extrabold text-slate-900">tra ${item.etaMinutes} min</div>
-                <div class="text-[10px] font-semibold text-slate-400">ore ${item.clockTime}</div>
-              </div>
+              <span class="font-bold text-emerald-400 text-[11px]">
+                ${arr.eta_minutes !== null ? `tra ${arr.eta_minutes} min` : arr.status_text}
+              </span>
             </div>
           `).join('');
+        } else {
+          upcomingList.innerHTML = `<div class="text-slate-400 text-xs py-1">Nessun'altra corsa in coda.</div>`;
+        }
+      }
 
-          subList.querySelectorAll('.sub-bus-row').forEach(row => {
-            row.onclick = () => {
-              const bId = row.getAttribute('data-bus-id');
-              const marker = bId ? state.layers.busMarkers.get(bId) : null;
-              if (marker) {
-                state.followedBusId = bId;
-                state.map.flyTo(marker.getLatLng(), 16, { duration: 0.7 });
-              }
-            };
-          });
+      function updateCollapsedSummary() {
+        const stops = state.staticData?.routes_by_direction?.[state.direction]?.stops || [];
+        const stop = stops.find(s => String(s.stop_id) === String(state.selectedStopId));
+        const stopName = stop ? stop.stop_name : 'Fermata';
+
+        const collapsedStop = document.getElementById('collapsedStopText');
+        const collapsedEta = document.getElementById('collapsedEtaText');
+        if (collapsedStop) collapsedStop.textContent = stopName;
+
+        const first = state.arrivalsData?.arrivals?.[0];
+        if (collapsedEta) {
+          if (!first) collapsedEta.textContent = 'Nessun bus';
+          else if (first.is_cancelled) collapsedEta.textContent = 'SOPP';
+          else if (first.eta_minutes <= 0) collapsedEta.textContent = 'In arrivo';
+          else collapsedEta.textContent = `${first.eta_minutes} min`;
         }
       }
 
       /* ========================================================================
-         10. CONTROLLI UI E PRESET MATTINA/SERA
+         6. FETCH E RENDERING AUTOBUS REALI (/api/linea6/live)
          ======================================================================== */
-      function populateStopDropdown() {
-        const selectEl = document.getElementById('stopSelect');
-        if (!selectEl) return;
-        const stops = state.routes[state.direction].stops;
-        selectEl.innerHTML = stops.map(s =>
-          `<option value="${s.stop_id}">${s.stop_name} (#${s.stop_code})</option>`
-        ).join('');
-        selectEl.value = state.selectedStopId;
-      }
-
-      function updateDirectionButtonsUI() {
-        const btn0 = document.getElementById('btnDir0');
-        const btn1 = document.getElementById('btnDir1');
-        if (!btn0 || !btn1) return;
-        if (state.direction === 0) {
-          btn0.className = 'py-2 px-2.5 rounded-lg text-xs font-bold transition-all bg-white text-blue-600 shadow-sm flex items-center justify-center gap-1';
-          btn1.className = 'py-2 px-2.5 rounded-lg text-xs font-bold transition-all text-slate-600 hover:text-slate-900 flex items-center justify-center gap-1';
-        } else {
-          btn1.className = 'py-2 px-2.5 rounded-lg text-xs font-bold transition-all bg-white text-blue-600 shadow-sm flex items-center justify-center gap-1';
-          btn0.className = 'py-2 px-2.5 rounded-lg text-xs font-bold transition-all text-slate-600 hover:text-slate-900 flex items-center justify-center gap-1';
-        }
-      }
-
-      function switchDirection(newDir, customStopId = null) {
-        state.direction = newDir;
-        state.followedBusId = null;
-        updateDirectionButtonsUI();
-        renderDirectionStopsOnly();
-
-        if (customStopId) {
-          state.selectedStopId = customStopId;
-          setUserPosition(state.userPos.lat, state.userPos.lon, state.userPos.label, false);
-        } else {
-          setUserPosition(state.userPos.lat, state.userPos.lon, state.userPos.label, true);
-        }
-
-        populateStopDropdown();
-        lastUiRenderSec = -1;
-      }
-
-      function applyMorningCommute(pan = true) {
-        state.userPos = { ...STAZIONE_COORDS };
-        renderUserMarker();
-        switchDirection(1, 'CE_6111');
-        if (pan && state.map) state.map.flyTo([STAZIONE_COORDS.lat, STAZIONE_COORDS.lon], 15, { duration: 0.7 });
-      }
-
-      function applyEveningCommute(pan = true) {
-        state.userPos = { ...CAMPUS_COORDS };
-        renderUserMarker();
-        switchDirection(0, 'CE_6008');
-        if (pan && state.map) state.map.flyTo([CAMPUS_COORDS.lat, CAMPUS_COORDS.lon], 16, { duration: 0.7 });
-      }
-
-      function initSmartCommuteDefault() {
+      async function fetchLiveBuses() {
         try {
-          const raw = localStorage.getItem('linea6_prefs');
-          if (raw) {
-            const saved = JSON.parse(raw);
-            if (saved && (Date.now() - saved.savedAt < 45 * 60 * 1000)) {
-              state.userPos = saved.userPos || { ...CAMPUS_COORDS };
-              renderUserMarker();
-              switchDirection(saved.direction || 0, saved.selectedStopId || 'CE_6008');
-              return;
-            }
-          }
-        } catch (e) {}
-
-        const hour = new Date().getHours();
-        if (hour >= 6 && hour < 12) {
-          applyMorningCommute(false);
-        } else {
-          applyEveningCommute(false);
+          const res = await fetch('/api/linea6/live');
+          const data = await res.json();
+          state.liveBuses = data?.buses || [];
+          renderLiveBusesOnMap(state.liveBuses);
+        } catch (err) {
+          console.error('Errore fetch live buses:', err);
         }
       }
 
-      function bindEvents() {
-        document.getElementById('btnDir0')?.addEventListener('click', () => switchDirection(0));
-        document.getElementById('btnDir1')?.addEventListener('click', () => switchDirection(1));
-        document.getElementById('chipMorningCommute')?.addEventListener('click', () => applyMorningCommute(true));
-        document.getElementById('chipEveningCommute')?.addEventListener('click', () => applyEveningCommute(true));
-
-        document.getElementById('btnForceDaySim')?.addEventListener('click', () => {
-          state.forceDaySimulation = true;
-          lastUiRenderSec = -1;
-        });
-
-        document.getElementById('stopSelect')?.addEventListener('change', (e) => {
-          state.followedBusId = null;
-          selectStopById(e.target.value, true);
-          lastUiRenderSec = -1;
-        });
-
-        document.getElementById('btnLocateCampus')?.addEventListener('click', () => applyEveningCommute(true));
-
-        document.getElementById('btnRealGps')?.addEventListener('click', () => {
-          state.followedBusId = null;
-          if ('geolocation' in navigator) {
-            navigator.geolocation.getCurrentPosition(
-              (pos) => {
-                if (pos.coords.accuracy > 400) {
-                  setUserPosition(CAMPUS_COORDS.lat, CAMPUS_COORDS.lon, 'Campus Universitario (GPS PC)', true);
-                  state.map.flyTo([CAMPUS_COORDS.lat, CAMPUS_COORDS.lon], 16, { duration: 0.7 });
-                } else {
-                  setUserPosition(pos.coords.latitude, pos.coords.longitude, 'La tua posizione GPS', true);
-                  state.map.flyTo([pos.coords.latitude, pos.coords.longitude], 16, { duration: 0.7 });
-                }
-                lastUiRenderSec = -1;
-              },
-              () => {
-                setUserPosition(CAMPUS_COORDS.lat, CAMPUS_COORDS.lon, 'Campus Universitario', true);
-                state.map.flyTo([CAMPUS_COORDS.lat, CAMPUS_COORDS.lon], 16, { duration: 0.7 });
-                lastUiRenderSec = -1;
-              },
-              { enableHighAccuracy: true, timeout: 5000 }
-            );
+      function renderLiveBusesOnMap(buses) {
+        // Rimuovi bus che non sono più attivi
+        const activeIds = new Set(buses.map(b => b.id));
+        for (const [id, marker] of state.busMarkers.entries()) {
+          if (!activeIds.has(id)) {
+            state.busesGroup.removeLayer(marker);
+            state.busMarkers.delete(id);
           }
-        });
+        }
 
-        document.getElementById('btnToggleAlarm')?.addEventListener('click', () => {
-          state.alarmEnabled = !state.alarmEnabled;
-          state.lastAlertedBusId = null;
-          const btn = document.getElementById('btnToggleAlarm');
-          const txt = document.getElementById('alarmBtnText');
-          const pill = document.getElementById('alarmStatusPill');
+        // Disegna o aggiorna ogni autobus reale
+        buses.forEach(b => {
+          const isCurrentDir = b.direction_id === state.direction;
+          const bgCol = isCurrentDir ? '#E30613' : '#334155';
+          const vehicleText = b.vehicle_id && b.vehicle_id !== 'N.D.' ? `#${b.vehicle_id}` : '';
+          const rotAngle = b.bearing || 0;
 
-          if (state.alarmEnabled) {
-            playDepartureChime();
-            if (btn) btn.className = 'w-full py-1.5 px-3 rounded-xl border border-amber-300 bg-amber-50 text-amber-900 text-xs font-bold flex items-center justify-between transition';
-            if (txt) txt.textContent = '🔔 Sveglia attiva (avviso a +2 min margine)';
-            if (pill) {
-              pill.textContent = 'ON';
-              pill.className = 'text-[10px] font-bold px-2 py-0.5 rounded-full bg-amber-500 text-white';
-            }
+          const html = `
+            <div class="bus-marker-wrap">
+              <div class="bus-badge" style="background: ${bgCol};">
+                <div class="bus-arrow" style="transform: translateX(-50%) rotate(${rotAngle}deg); border-bottom-color: ${bgCol};"></div>
+                <span>6</span>
+              </div>
+              <div class="bus-label">Bus ${vehicleText}</div>
+            </div>
+          `;
+
+          const busIcon = L.divIcon({
+            className: 'bus-marker-container',
+            html: html,
+            iconSize: [44, 48],
+            iconAnchor: [22, 24]
+          });
+
+          if (!state.busMarkers.has(b.id)) {
+            const marker = L.marker([b.lat, b.lon], { icon: busIcon, zIndexOffset: 800 }).addTo(state.busesGroup);
+            marker.bindPopup(`
+              <div class="p-2 text-xs">
+                <div class="font-extrabold text-sm text-[#E30613] mb-1">Linea 6 • ${b.destination}</div>
+                <div>Matricola: <strong>${b.vehicle_id}</strong></div>
+                <div>Stato: <strong>${b.status_text || b.status}</strong></div>
+                <div class="text-[11px] text-slate-500 mt-1">Tra: ${b.current_stop?.stop_name} ➔ ${b.next_stop?.stop_name}</div>
+              </div>
+            `);
+            state.busMarkers.set(b.id, marker);
           } else {
-            if (btn) btn.className = 'w-full py-1.5 px-3 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 text-xs font-bold flex items-center justify-between transition';
-            if (txt) txt.textContent = '🔔 Attiva sveglia "Esci ora"';
-            if (pill) {
-              pill.textContent = 'OFF';
-              pill.className = 'text-[10px] font-bold px-2 py-0.5 rounded-full bg-slate-100 text-slate-500';
-            }
-            document.getElementById('alarmAlertBanner')?.classList.add('hidden');
+            const existing = state.busMarkers.get(b.id);
+            existing.setLatLng([b.lat, b.lon]);
+            existing.setIcon(busIcon);
           }
         });
+      }
 
-        document.getElementById('btnDismissAlarm')?.addEventListener('click', () => {
-          document.getElementById('alarmAlertBanner')?.classList.add('hidden');
-        });
+      function fitBusesOnMap() {
+        if (!state.liveBuses.length) {
+          // Se non ci sono bus, centra sulle fermate della direzione corrente
+          const stops = state.staticData?.routes_by_direction?.[state.direction]?.stops || [];
+          if (stops.length) {
+            const bounds = L.latLngBounds(stops.map(s => [s.lat, s.lon]));
+            state.map.fitBounds(bounds, { padding: [40, 40] });
+          }
+          return;
+        }
 
-        document.getElementById('fabCenterUser')?.addEventListener('click', () => {
-          state.followedBusId = null;
-          state.map.flyTo([state.userPos.lat, state.userPos.lon], 16, { duration: 0.6 });
-        });
+        const latlngs = state.liveBuses.map(b => [b.lat, b.lon]);
+        if (state.selectedStopId && state.staticData) {
+          const stops = state.staticData.routes_by_direction?.[state.direction]?.stops || [];
+          const s = stops.find(st => String(st.stop_id) === String(state.selectedStopId));
+          if (s) latlngs.push([s.lat, s.lon]);
+        }
 
-        document.getElementById('fabFitRoute')?.addEventListener('click', () => {
-          state.followedBusId = null;
-          const stops = state.routes[state.direction].stops.map(s => [s.lat, s.lon]);
-          state.map.fitBounds(L.latLngBounds(stops), { padding: [50, 50] });
-        });
-
-        document.getElementById('mobileHandle')?.addEventListener('click', () => {
-          document.getElementById('transitPanel')?.classList.toggle('collapsed');
-        });
+        state.map.fitBounds(L.latLngBounds(latlngs), { padding: [60, 60], maxZoom: 16 });
       }
 
       /* ========================================================================
-         11. LOOP DI ANIMAZIONE 60 FPS E AVVIO
+         7. EVENTI UI & GESTIONE BOTTOM SHEET
          ======================================================================== */
-      function animationLoop() {
-        const nowMs = Date.now();
-        const schedule = getScheduleProfile(nowMs);
-        const liveBuses = computeLiveBusesForDirection(state.direction, nowMs, schedule);
-        const arrivalsInfo = computeArrivalsForSelectedStop(liveBuses, nowMs, schedule);
+      function bindEvents() {
+        // Toggle tab direzione
+        const tab0 = document.getElementById('tabDir0');
+        const tab1 = document.getElementById('tabDir1');
 
-        updateMapBusesOnly(liveBuses, arrivalsInfo);
-        updatePassengerCardUI(arrivalsInfo, nowMs, schedule);
+        tab0?.addEventListener('click', () => {
+          if (state.direction === '0') return;
+          state.direction = '0';
+          tab0.className = 'py-2.5 px-3 rounded-xl font-bold text-xs transition flex items-center justify-center gap-1.5 bg-[#E30613] text-white shadow-sm';
+          tab1.className = 'py-2.5 px-3 rounded-xl font-bold text-xs transition flex items-center justify-center gap-1.5 text-slate-600 hover:text-slate-900';
+          renderStopSelectOptions();
+          renderStopsOnMap();
+          fetchArrivalsForStop();
+          renderLiveBusesOnMap(state.liveBuses);
+        });
 
-        requestAnimationFrame(animationLoop);
+        tab1?.addEventListener('click', () => {
+          if (state.direction === '1') return;
+          state.direction = '1';
+          tab1.className = 'py-2.5 px-3 rounded-xl font-bold text-xs transition flex items-center justify-center gap-1.5 bg-[#E30613] text-white shadow-sm';
+          tab0.className = 'py-2.5 px-3 rounded-xl font-bold text-xs transition flex items-center justify-center gap-1.5 text-slate-600 hover:text-slate-900';
+          renderStopSelectOptions();
+          renderStopsOnMap();
+          fetchArrivalsForStop();
+          renderLiveBusesOnMap(state.liveBuses);
+        });
+
+        // Cambio fermata dal select
+        document.getElementById('stopSelect')?.addEventListener('change', (e) => {
+          selectStop(e.target.value);
+        });
+
+        // Click maniglia per collassare/espandere bottom sheet
+        const sheet = document.getElementById('bottomSheet');
+        const handle = document.getElementById('sheetHandle');
+        const collapsedSummary = document.getElementById('collapsedSummary');
+
+        handle?.addEventListener('click', () => {
+          state.isCollapsed = !state.isCollapsed;
+          if (state.isCollapsed) {
+            sheet.classList.add('collapsed');
+            collapsedSummary.classList.remove('hidden');
+          } else {
+            sheet.classList.remove('collapsed');
+            collapsedSummary.classList.add('hidden');
+          }
+        });
+
+        // Pulsante Mia Posizione
+        document.getElementById('btnLocate')?.addEventListener('click', () => {
+          if (state.userPos) {
+            state.map.flyTo([state.userPos.lat, state.userPos.lon], 16, { duration: 0.6 });
+          } else {
+            initUserLocation();
+          }
+        });
+
+        // Pulsante Inquadra Bus
+        document.getElementById('btnFitBuses')?.addEventListener('click', fitBusesOnMap);
       }
 
+      /* ========================================================================
+         8. AVVIO APPLICAZIONE
+         ======================================================================== */
       window.addEventListener('DOMContentLoaded', () => {
         initMap();
-        initSmartCommuteDefault();
         bindEvents();
-        requestAnimationFrame(animationLoop);
-        pollBackendLiveApi();
-        setInterval(pollBackendLiveApi, 5000);
+        loadStaticStops();
+
+        // Polling automatico dati reali ogni 20 secondi
+        state.pollTimer = setInterval(() => {
+          fetchLiveBuses();
+          fetchArrivalsForStop();
+        }, 20000);
       });
     })();
   </script>
