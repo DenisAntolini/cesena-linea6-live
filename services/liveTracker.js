@@ -93,7 +93,7 @@ function haversineMeters(lat1, lon1, lat2, lon2) {
  */
 function interpolateAlongPath(subPath, progress) {
   if (!subPath || subPath.length === 0) {
-    return { lat: 44.14000, lon: 12.24000, bearing: 0 };
+    return { lat: 44.14376, lon: 12.26062, bearing: 0 };
   }
   if (subPath.length === 1 || progress <= 0) {
     const p1 = subPath[0];
@@ -396,14 +396,31 @@ async function getRealLiveBuses(staticData) {
     const rawPercorso = await fetchTripPercorso(tripId, tripMeta.palina || '6721');
     if (!rawPercorso || rawPercorso.length < 2) continue;
 
+    // Seleziona la direzione del bus e filtra rigorosamente le fermate su quelle note
+    const dirId = String(tripMeta.direction_id || (tripMeta.destination?.includes('Montefiore') ? '0' : '1'));
+    const validStopsList = (dirId === '1' ? stopsDir1 : stopsDir0);
+    const validStopsMap = new Map();
+    validStopsList.forEach(s => validStopsMap.set(String(s.stop_id), s));
+
+    const shape = (dirId === '1' ? staticData.shape_dir_1 : staticData.shape_dir_0) ||
+                  staticData.routes_by_direction?.[dirId]?.shape || [];
+
+    // Filtra nodi tecnici (es. Semaforo-* o fermate non riconosciute) per evitare salti fuori percorso
+    const filteredPercorso = rawPercorso.filter(s => validStopsMap.has(String(s.stop_id)));
+    if (filteredPercorso.length < 2) continue;
+
     // Aggiusta gli orari di fermata con il ritardo effettivo rilevato
     const delaySec = (tripMeta.delay_minutes || 0) * 60;
-    const adjustedStops = rawPercorso.map(s => {
+    const adjustedStops = filteredPercorso.map(s => {
       const scheduledSec = timeStrToSeconds(s.departure_time || s.arrival_time) || 0;
+      const validStop = validStopsMap.get(String(s.stop_id));
       return {
         ...s,
         adjustedSec: scheduledSec + delaySec,
-        coords: stopCoordsMap.get(String(s.stop_id)) || null
+        lat: validStop.lat,
+        lon: validStop.lon,
+        shape_index: typeof validStop.shape_index === 'number' ? validStop.shape_index : 0,
+        stop_name: validStop.stop_name
       };
     });
 
@@ -446,49 +463,38 @@ async function getRealLiveBuses(staticData) {
       }
     }
 
-    const coordsA = stopA.coords || { lat: 44.14000, lon: 12.24000 };
-    const coordsB = stopB.coords || coordsA;
-
-    // Seleziona la polilinea reale per la direzione del bus
-    const dirId = String(tripMeta.direction_id || '0');
-    const shape = (dirId === '1' ? staticData.shape_dir_1 : staticData.shape_dir_0) ||
-                  staticData.routes_by_direction?.[dirId]?.shape || [];
-
-    let lat = coordsA.lat;
-    let lon = coordsA.lon;
+    let lat = stopA.lat;
+    let lon = stopA.lon;
     let bearing = 0;
 
-    let pathInterpolated = false;
-    if (shape.length >= 2) {
-      const matchA = findClosestVertexIndex(shape, coordsA.lat, coordsA.lon, 0);
-      let matchB = findClosestVertexIndex(shape, coordsB.lat, coordsB.lon, matchA.index >= 0 ? matchA.index : 0);
-      if (matchB.index < matchA.index || matchB.distance > 200) {
-        matchB = findClosestVertexIndex(shape, coordsB.lat, coordsB.lon, 0);
-      }
+    const idxA = stopA.shape_index;
+    const idxB = stopB.shape_index;
 
-      // Se idxB > idxA ed entrambi gli stop sono entro 200 metri dalla polilinea, interpola lungo il tracciato reale
-      if (matchA.index >= 0 && matchB.index >= 0 && matchB.index > matchA.index && matchA.distance <= 200 && matchB.distance <= 200) {
-        const subPath = shape.slice(matchA.index, matchB.index + 1);
+    if (shape && shape.length >= 2) {
+      if (idxA === idxB || idxB < idxA) {
+        const pt = shape[idxA] || shape[0];
+        lat = pt[0];
+        lon = pt[1];
+        const nextPt = shape[Math.min(shape.length - 1, idxA + 1)] || pt;
+        bearing = calculateBearing(pt[0], pt[1], nextPt[0], nextPt[1]);
+      } else {
+        const subPath = shape.slice(idxA, idxB + 1);
         const interp = interpolateAlongPath(subPath, progress);
         lat = interp.lat;
         lon = interp.lon;
         bearing = interp.bearing;
-        pathInterpolated = true;
       }
-    }
-
-    // Fallback lineare estremo se la polilinea manca o non combacia
-    if (!pathInterpolated) {
-      lat = coordsA.lat + (coordsB.lat - coordsA.lat) * progress;
-      lon = coordsA.lon + (coordsB.lon - coordsA.lon) * progress;
-      bearing = calculateBearing(coordsA.lat, coordsA.lon, coordsB.lat, coordsB.lon);
+    } else {
+      lat = stopA.lat + (stopB.lat - stopA.lat) * progress;
+      lon = stopA.lon + (stopB.lon - stopA.lon) * progress;
+      bearing = calculateBearing(stopA.lat, stopA.lon, stopB.lat, stopB.lon);
     }
 
     liveBuses.push({
       id: tripMeta.vehicle_id ? `bus_${tripMeta.vehicle_id}` : `trip_${tripId}`,
       vehicle_id: tripMeta.vehicle_id || 'N.D.',
       trip_id: tripId,
-      direction_id: tripMeta.direction_id || '0',
+      direction_id: dirId,
       destination: tripMeta.destination,
       lat: Math.round(lat * 100000) / 100000,
       lon: Math.round(lon * 100000) / 100000,
@@ -498,11 +504,11 @@ async function getRealLiveBuses(staticData) {
       status_text: tripMeta.status_text,
       current_stop: {
         stop_id: String(stopA.stop_id),
-        stop_name: stopA.coords?.stop_name || stopA.stop_name
+        stop_name: stopA.stop_name
       },
       next_stop: {
         stop_id: String(stopB.stop_id),
-        stop_name: stopB.coords?.stop_name || stopB.stop_name
+        stop_name: stopB.stop_name
       },
       is_live: true,
       last_sync_rome: nowRome.timeString

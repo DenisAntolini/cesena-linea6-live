@@ -58,13 +58,21 @@
       filter: saturate(0.85) contrast(0.98) brightness(1.02);
     }
 
-    /* Marker Autobus Reale */
+    /* Marker Autobus Reale - Apple / Google Maps Transit Style */
     .bus-marker-wrap {
       display: flex;
       flex-direction: column;
       align-items: center;
-      transform: translate(-50%, -50%);
       pointer-events: auto;
+      user-select: none;
+    }
+    .bus-badge-container {
+      position: relative;
+      width: 42px;
+      height: 42px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
     }
     .bus-badge {
       width: 38px;
@@ -72,51 +80,100 @@
       border-radius: 50%;
       background: #E30613;
       color: #ffffff;
-      font-weight: 900;
-      font-size: 17px;
       display: flex;
       align-items: center;
       justify-content: center;
-      box-shadow: 0 4px 12px rgba(227, 6, 19, 0.45), 0 0 0 3px #ffffff;
+      border: 3px solid #ffffff;
+      box-shadow: 0 4px 14px rgba(0, 0, 0, 0.28), 0 2px 6px rgba(227, 6, 19, 0.4);
       position: relative;
+      z-index: 2;
     }
-    .bus-arrow {
+    .bus-bearing-ring {
       position: absolute;
-      top: -6px;
+      inset: -4px;
+      pointer-events: none;
+      z-index: 1;
+      transition: transform 0.5s ease-out;
+    }
+    .bus-bearing-arrow {
+      position: absolute;
+      top: -3px;
       left: 50%;
+      transform: translateX(-50%);
       width: 0;
       height: 0;
       border-left: 5px solid transparent;
       border-right: 5px solid transparent;
       border-bottom: 7px solid #E30613;
-      transform: translateX(-50%);
+      filter: drop-shadow(0 1px 2px rgba(0,0,0,0.3));
     }
-    .bus-label {
+    .bus-subbadge {
+      display: flex;
+      align-items: center;
       margin-top: 3px;
-      background: rgba(15, 23, 42, 0.9);
+      background: rgba(15, 23, 42, 0.92);
+      backdrop-filter: blur(4px);
+      -webkit-backdrop-filter: blur(4px);
       color: #ffffff;
       font-size: 10px;
-      font-weight: 700;
-      padding: 2px 6px;
+      font-weight: 800;
+      padding: 2px 7px;
       border-radius: 9999px;
+      border: 1px solid rgba(255, 255, 255, 0.2);
       white-space: nowrap;
-      box-shadow: 0 2px 6px rgba(0,0,0,0.25);
+      box-shadow: 0 2px 6px rgba(0, 0, 0, 0.35);
+      letter-spacing: 0.02em;
+      z-index: 3;
+    }
+    .live-dot-pulse {
+      display: inline-block;
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: #22C55E;
+      margin-right: 4px;
+      box-shadow: 0 0 0 0 rgba(34, 197, 94, 0.7);
+      animation: liveDotPulse 1.8s infinite;
+    }
+    @keyframes liveDotPulse {
+      0% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(34, 197, 94, 0.7); }
+      70% { transform: scale(1); box-shadow: 0 0 0 5px rgba(34, 197, 94, 0); }
+      100% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(34, 197, 94, 0); }
     }
 
-    /* Marker Fermata Selezionata */
-    .stop-selected-pulse {
-      width: 22px;
-      height: 22px;
+    /* Marker Fermata Selezionata - Apple Maps Pin */
+    .selected-stop-wrap {
+      position: relative;
+      width: 28px;
+      height: 28px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .selected-stop-halo {
+      position: absolute;
+      inset: -5px;
+      border-radius: 50%;
+      background: rgba(227, 6, 19, 0.25);
+      animation: stopHaloPulse 2s infinite ease-out;
+    }
+    @keyframes stopHaloPulse {
+      0% { transform: scale(0.8); opacity: 0.8; }
+      50% { transform: scale(1.35); opacity: 0; }
+      100% { transform: scale(0.8); opacity: 0; }
+    }
+    .selected-stop-dot {
+      position: relative;
+      width: 24px;
+      height: 24px;
       border-radius: 50%;
       background: #E30613;
       border: 3px solid #ffffff;
-      box-shadow: 0 0 0 4px rgba(227, 6, 19, 0.35);
-      animation: pulseStop 2s infinite;
-    }
-    @keyframes pulseStop {
-      0% { box-shadow: 0 0 0 2px rgba(227, 6, 19, 0.5); }
-      70% { box-shadow: 0 0 0 9px rgba(227, 6, 19, 0); }
-      100% { box-shadow: 0 0 0 2px rgba(227, 6, 19, 0); }
+      box-shadow: 0 3px 10px rgba(0, 0, 0, 0.35);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      z-index: 2;
     }
 
     /* Punto Blu Utente */
@@ -621,19 +678,27 @@
           if (isSelected) {
             const stopIcon = L.divIcon({
               className: 'stop-selected-container',
-              html: '<div class="stop-selected-pulse"></div>',
-              iconSize: [22, 22],
-              iconAnchor: [11, 11]
+              html: `
+                <div class="selected-stop-wrap">
+                  <div class="selected-stop-halo"></div>
+                  <div class="selected-stop-dot">
+                    <svg class="w-3 h-3 text-white fill-current" viewBox="0 0 24 24"><path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7zm0 9.5c-1.38 0-2.5-1.12-2.5-2.5s1.12-2.5 2.5-2.5 2.5 1.12 2.5 2.5-1.12 2.5-2.5 2.5z"/></svg>
+                  </div>
+                </div>
+              `,
+              iconSize: [28, 28],
+              iconAnchor: [14, 14]
             });
-            const marker = L.marker([s.lat, s.lon], { icon: stopIcon, zIndexOffset: 500 });
+            const marker = L.marker([s.lat, s.lon], { icon: stopIcon, zIndexOffset: 600 });
+            marker.bindTooltip(`<strong>${s.stop_name}</strong> (Fermata selezionata)`, { direction: 'top', offset: [0, -14] });
             marker.on('click', () => selectStop(s.stop_id));
             marker.addTo(state.stopsGroup);
           } else {
             const circle = L.circleMarker([s.lat, s.lon], {
               radius: 5,
-              fillColor: '#ffffff',
-              color: '#475569',
-              weight: 2,
+              fillColor: '#FFFFFF',
+              color: '#1A73E8',
+              weight: 2.5,
               fillOpacity: 1
             });
             circle.bindTooltip(`${s.stop_name}`, { direction: 'top', offset: [0, -6] });
@@ -870,27 +935,36 @@
           }
         }
 
-        // Posizionamento 2D libero senza snap: l'autobus va direttamente alle sue coordinate GPS
+        // Posizionamento 2D ad alta precisione coordinato con la direzione
         filteredBuses.forEach(b => {
-          const bgCol = '#E30613';
-          const vehicleText = b.vehicle_id && b.vehicle_id !== 'N.D.' ? `#${b.vehicle_id}` : '';
+          const vehicleText = b.vehicle_id && b.vehicle_id !== 'N.D.' ? `#${b.vehicle_id}` : 'Live';
           const rotAngle = b.bearing || 0;
 
           const html = `
             <div class="bus-marker-wrap">
-              <div class="bus-badge" style="background: ${bgCol};">
-                <div class="bus-arrow" style="transform: translateX(-50%) rotate(${rotAngle}deg); border-bottom-color: ${bgCol};"></div>
-                <span>6</span>
+              <div class="bus-badge-container">
+                <div class="bus-bearing-ring" style="transform: rotate(${rotAngle}deg);">
+                  <div class="bus-bearing-arrow"></div>
+                </div>
+                <div class="bus-badge">
+                  <svg class="w-3.5 h-3.5 mr-0.5 text-white fill-current" viewBox="0 0 24 24">
+                    <path d="M4 16c0 .88.39 1.67 1 2.22V20c0 .55.45 1 1 1h1c.55 0 1-.45 1-1v-1h8v1c0 .55.45 1 1 1h1c.55 0 1-.45 1-1v-1.78c.61-.55 1-1.34 1-2.22V6c0-3.5-3.58-4-8-4s-8 .5-8 4v10zm3.5 1c-.83 0-1.5-.67-1.5-1.5S6.67 14 7.5 14s1.5.67 1.5 1.5S8.33 17 7.5 17zm9 0c-.83 0-1.5-.67-1.5-1.5s.67-1.5 1.5-1.5 1.5.67 1.5 1.5-.67 1.5-1.5 1.5zm1.5-6H6V6h12v5z"/>
+                  </svg>
+                  <span class="text-xs font-black tracking-tight text-white leading-none">6</span>
+                </div>
               </div>
-              <div class="bus-label">Bus ${vehicleText}</div>
+              <div class="bus-subbadge">
+                <span class="live-dot-pulse"></span>
+                <span>${vehicleText}</span>
+              </div>
             </div>
           `;
 
           const busIcon = L.divIcon({
             className: 'bus-marker-container',
             html: html,
-            iconSize: [44, 48],
-            iconAnchor: [22, 24]
+            iconSize: [52, 60],
+            iconAnchor: [26, 21]
           });
 
           if (!state.busMarkers.has(b.id)) {
