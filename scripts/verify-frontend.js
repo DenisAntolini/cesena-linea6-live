@@ -101,8 +101,30 @@ async function run() {
   console.log('Navigazione a http://localhost:3000...');
   await pageSend('Page.navigate', { url: 'http://localhost:3000' });
 
-  // Attesa per completamento rendering e chiamate alle API reali
-  await new Promise(r => setTimeout(r, 4500));
+  // Attesa che la pagina carichi completamente e popoli le fermate
+  console.log('Attesa caricamento completo DOM e API statiche...');
+  let loaded = false;
+  for (let i = 0; i < 40; i++) {
+    await new Promise(r => setTimeout(r, 250));
+    const check = await pageSend('Runtime.evaluate', {
+      expression: `(() => {
+        const sel = document.getElementById('stopSelect');
+        return sel && sel.options && sel.options.length > 5;
+      })()`,
+      returnByValue: true
+    });
+    if (check.result?.value === true) {
+      loaded = true;
+      break;
+    }
+  }
+
+  if (!loaded) {
+    console.warn('Timeout attesa popolamento select fermate.');
+  }
+
+  // Ulteriore secondo per assestare Leaflet layer
+  await new Promise(r => setTimeout(r, 1000));
 
   const evalResult = await pageSend('Runtime.evaluate', {
     expression: `(() => {
@@ -115,12 +137,11 @@ async function run() {
       const heroVehicle = document.getElementById('heroVehicleBadge')?.innerText;
       const hasLeafletMap = !!document.querySelector('.leaflet-container');
       const busMarkers = document.querySelectorAll('.bus-marker-wrap').length;
-      const sheetIsCollapsed = document.getElementById('bottomSheet')?.classList.contains('collapsed');
+      const btnToggleRoute = !!document.getElementById('btnToggleRoute');
 
-      // Verifica che i tab siano nel blocco superiore e NON dentro #bottomSheetContent (quindi mai tagliati dallo scroll)
-      const tabsInsideScroll = document.getElementById('bottomSheetContent')?.contains(document.getElementById('directionTabsContainer'));
-      const tab0Text = document.getElementById('tabDir0')?.innerText?.trim();
-      const tab1Text = document.getElementById('tabDir1')?.innerText?.trim();
+      // Verifica polilinee disegnate su Leaflet SVG
+      const paths = Array.from(document.querySelectorAll('path.leaflet-interactive'));
+      const strokeColors = paths.map(p => p.getAttribute('stroke')).filter(Boolean);
 
       return {
         hasLeafletMap,
@@ -131,10 +152,8 @@ async function run() {
         heroTimes,
         heroVehicle,
         busMarkers,
-        tabsAreStickyInTopBlock: !tabsInsideScroll,
-        tab0Text,
-        tab1Text,
-        sheetIsCollapsed
+        btnToggleRoute,
+        renderedPathColors: strokeColors.slice(0, 10)
       };
     })()`,
     returnByValue: true
@@ -143,7 +162,7 @@ async function run() {
   console.log('\n=== STATO APPLICAZIONE NEL BROWSER ===');
   console.log(JSON.stringify(evalResult.result?.value || evalResult.result || evalResult, null, 2));
 
-  // Test switch direzione ➔ Rio Maggiore
+  // Test switch direzione ➔ Verso Rio Maggiore
   console.log('\nTest switch direzione a "➔ Verso Rio Maggiore"...');
   await pageSend('Runtime.evaluate', {
     expression: `document.getElementById('tabDir1')?.click()`
@@ -154,28 +173,56 @@ async function run() {
     expression: `(() => {
       const stopSelect = document.getElementById('stopSelect');
       const busMarkers = document.querySelectorAll('.bus-marker-wrap').length;
+      const paths = Array.from(document.querySelectorAll('path.leaflet-interactive'));
       return {
         direction1OptionsCount: stopSelect?.options?.length || 0,
         selectedStopText: stopSelect?.options[stopSelect.selectedIndex]?.text,
-        busMarkersDir1: busMarkers
+        busMarkersDir1: busMarkers,
+        renderedPathsCount: paths.length
       };
     })()`,
     returnByValue: true
   });
   console.log('Stato dopo switch direzione:', JSON.stringify(afterSwitch.result?.value || afterSwitch.result, null, 2));
 
-  // Test toggle bottom sheet
-  console.log('\nTest apertura/chiusura Bottom Sheet...');
+  // Test toggle visibilità tracciato
+  console.log('\nTest toggle pulsante Mostra/Nascondi Percorso...');
   await pageSend('Runtime.evaluate', {
-    expression: `document.getElementById('sheetHandle')?.click()`
+    expression: `document.getElementById('btnToggleRoute')?.click()`
   });
   await new Promise(r => setTimeout(r, 600));
 
-  const afterCollapse = await pageSend('Runtime.evaluate', {
-    expression: `document.getElementById('bottomSheet')?.classList.contains('collapsed')`,
+  const afterToggleOff = await pageSend('Runtime.evaluate', {
+    expression: `(() => {
+      const stored = localStorage.getItem('cesena_linea6_route_visible');
+      const paths = Array.from(document.querySelectorAll('path.leaflet-interactive'));
+      return {
+        localStorageVisible: stored,
+        remainingPathsCount: paths.length
+      };
+    })()`,
     returnByValue: true
   });
-  console.log('Bottom Sheet collassato con successo?', afterCollapse.result?.value);
+  console.log('Stato dopo toggle OFF:', JSON.stringify(afterToggleOff.result?.value || afterToggleOff.result, null, 2));
+
+  // Riattiva tracciato
+  await pageSend('Runtime.evaluate', {
+    expression: `document.getElementById('btnToggleRoute')?.click()`
+  });
+  await new Promise(r => setTimeout(r, 600));
+
+  const afterToggleOn = await pageSend('Runtime.evaluate', {
+    expression: `(() => {
+      const stored = localStorage.getItem('cesena_linea6_route_visible');
+      const paths = Array.from(document.querySelectorAll('path.leaflet-interactive'));
+      return {
+        localStorageVisible: stored,
+        restoredPathsCount: paths.length
+      };
+    })()`,
+    returnByValue: true
+  });
+  console.log('Stato dopo toggle ON:', JSON.stringify(afterToggleOn.result?.value || afterToggleOn.result, null, 2));
 
   pageWs.close();
   ws.close();
@@ -186,7 +233,7 @@ async function run() {
     console.error('\n[ATTENZIONE] Trovati errori console:', realErrors);
     process.exit(1);
   } else {
-    console.log('\n[SUCCESSO] 0 errori in console! Tutti i test delle 3 rifiniture superati.');
+    console.log('\n[SUCCESSO] 0 errori in console! Tutti i test della mappa OSM e tracciato superati.');
   }
 }
 

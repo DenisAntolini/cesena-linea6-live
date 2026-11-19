@@ -180,6 +180,12 @@
         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7h8m-8 4h8m-9 8h10a2 2 0 002-2V6a2 2 0 00-2-2H7a2 2 0 00-2 2v11a2 2 0 002 2zm1-2a1 1 0 100-2 1 1 0 000 2zm8 0a1 1 0 100-2 1 1 0 000 2z" />
       </svg>
     </button>
+    <!-- Mostra/Nascondi Tracciato Percorso -->
+    <button id="btnToggleRoute" title="Mostra/Nascondi Percorso" class="w-12 h-12 bg-white/95 backdrop-blur-md rounded-2xl shadow-lg border border-slate-100 flex items-center justify-center text-slate-700 active:scale-95 transition hover:bg-slate-50">
+      <svg id="routeIcon" class="w-6 h-6 text-blue-600 transition" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 20l-5.447-2.724A1 1 0 013 16.382V5.618a1 1 0 011.447-.894L9 7m0 13l6-3m-6 3V7m6 10l4.553 2.276A1 1 0 0021 18.382V7.618a1 1 0 00-.553-.894L15 4m0 13V4m0 0L9 7" />
+      </svg>
+    </button>
   </div>
 
   <!-- Bottom Sheet Transit iOS Safari Mobile-First: Flex Col con Tab Fissi in Cima -->
@@ -287,9 +293,46 @@
         userWalkLine: null,
         stopMarkers: new Map(),
         busMarkers: new Map(),
+        baseRouteGroup: null,
+        approachRouteGroup: null,
+        stopsGroup: null,
+        busesGroup: null,
+        routeVisible: localStorage.getItem('cesena_linea6_route_visible') !== 'false',
         pollTimer: null,
         isCollapsed: false
       };
+
+      function haversineMeters(lat1, lon1, lat2, lon2) {
+        const R = 6371000;
+        const dLat = (lat2 - lat1) * Math.PI / 180;
+        const dLon = (lon2 - lon1) * Math.PI / 180;
+        const a = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+                  Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
+                  Math.sin(dLon / 2) * Math.sin(dLon / 2);
+        return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+      }
+
+      function findClosestVertex(shape, targetLat, targetLon) {
+        let bestIdx = -1;
+        let minDist = Infinity;
+        for (let i = 0; i < shape.length; i++) {
+          const d = haversineMeters(targetLat, targetLon, shape[i][0], shape[i][1]);
+          if (d < minDist) {
+            minDist = d;
+            bestIdx = i;
+          }
+        }
+        return { index: bestIdx, distance: minDist };
+      }
+
+      function getPolylineForDirection(dir) {
+        if (!state.staticData) return [];
+        const key = dir === '1' ? 'shape_dir_1' : 'shape_dir_0';
+        if (Array.isArray(state.staticData[key]) && state.staticData[key].length > 0) {
+          return state.staticData[key];
+        }
+        return state.staticData.routes_by_direction?.[dir]?.shape || [];
+      }
 
       /* ========================================================================
          1. INIZIALIZZAZIONE MAPPA LEAFLET
@@ -308,16 +351,145 @@
           crossOrigin: true
         }).addTo(state.map);
 
-        // Gruppi di livelli
+        // Gruppi di livelli ordinati z-index corretto:
+        // 1. Tracciato base
+        // 2. Tracciato di avvicinamento attivo (evidenziato in blu acceso)
+        // 3. Fermate
+        // 4. Autobus
+        state.baseRouteGroup = L.layerGroup().addTo(state.map);
+        state.approachRouteGroup = L.layerGroup().addTo(state.map);
         state.stopsGroup = L.layerGroup().addTo(state.map);
         state.busesGroup = L.layerGroup().addTo(state.map);
+
+        updateRouteToggleButtonUI();
 
         // Geolocation browser / iPhone
         initUserLocation();
       }
 
       /* ========================================================================
-         2. LOCALIZZAZIONE UTENTE
+         2. TRACCIATO GOOGLE MAPS TRANSIT & APPROACH HIGHLIGHT
+         ======================================================================== */
+      function updateRouteToggleButtonUI() {
+        const btn = document.getElementById('btnToggleRoute');
+        const icon = document.getElementById('routeIcon');
+        if (!btn || !icon) return;
+
+        if (state.routeVisible) {
+          btn.classList.remove('opacity-60', 'bg-slate-100');
+          btn.classList.add('bg-white/95');
+          icon.classList.remove('text-slate-400');
+          icon.classList.add('text-blue-600');
+          btn.title = 'Nascondi tracciato percorso';
+        } else {
+          btn.classList.remove('bg-white/95');
+          btn.classList.add('opacity-60', 'bg-slate-100');
+          icon.classList.remove('text-blue-600');
+          icon.classList.add('text-slate-400');
+          btn.title = 'Mostra tracciato percorso';
+        }
+      }
+
+      function renderRouteGeometry() {
+        if (!state.baseRouteGroup) return;
+        state.baseRouteGroup.clearLayers();
+
+        if (!state.routeVisible) {
+          if (state.approachRouteGroup) state.approachRouteGroup.clearLayers();
+          updateRouteToggleButtonUI();
+          return;
+        }
+
+        updateRouteToggleButtonUI();
+
+        const shape = getPolylineForDirection(state.direction);
+        if (!shape || !shape.length) return;
+
+        // 1. Tracciato di fondo: bianco #FFFFFF, spessore 8, opacità 0.9 (casing protettivo)
+        L.polyline(shape, {
+          color: '#FFFFFF',
+          weight: 8,
+          opacity: 0.9,
+          lineCap: 'round',
+          lineJoin: 'round'
+        }).addTo(state.baseRouteGroup);
+
+        // 2. Tracciato bus: azzurro chiaro #93C5FD, spessore 5, opacità 0.95
+        L.polyline(shape, {
+          color: '#93C5FD',
+          weight: 5,
+          opacity: 0.95,
+          lineCap: 'round',
+          lineJoin: 'round'
+        }).addTo(state.baseRouteGroup);
+
+        updateApproachRouteHighlight();
+      }
+
+      function updateApproachRouteHighlight() {
+        if (!state.approachRouteGroup) return;
+        state.approachRouteGroup.clearLayers();
+
+        if (!state.routeVisible) return;
+
+        const shape = getPolylineForDirection(state.direction);
+        if (!shape || !shape.length || !state.selectedStopId || !state.staticData) return;
+
+        const currentStops = state.staticData.routes_by_direction?.[state.direction]?.stops || [];
+        const stop = currentStops.find(s => String(s.stop_id) === String(state.selectedStopId));
+        if (!stop) return;
+
+        // Identifica l'autobus più rilevante per la direzione attiva (preferendo quello della Hero Card)
+        const activeBuses = (state.liveBuses || []).filter(b => String(b.direction_id) === String(state.direction));
+        if (!activeBuses.length) return;
+
+        const firstArr = state.arrivalsData?.arrivals?.[0];
+        let approachingBus = null;
+
+        if (firstArr && firstArr.vehicle_id) {
+          approachingBus = activeBuses.find(b => String(b.vehicle_id) === String(firstArr.vehicle_id));
+        }
+        if (!approachingBus && firstArr && firstArr.trip_id) {
+          approachingBus = activeBuses.find(b => String(b.trip_id) === String(firstArr.trip_id));
+        }
+        if (!approachingBus) {
+          approachingBus = activeBuses[0];
+        }
+
+        if (!approachingBus || approachingBus.lat == null || approachingBus.lon == null) return;
+
+        const busMatch = findClosestVertex(shape, approachingBus.lat, approachingBus.lon);
+        const stopMatch = findClosestVertex(shape, stop.lat, stop.lon);
+
+        // Disegna il tratto blu acceso di Google Maps SOLO SE:
+        // 1. Il bus si trova a monte della fermata selezionata (busIdx < stopIdx)
+        // 2. La distanza del bus dalla polilinea è < 350 metri (evita righe storte in caso di deviazione lontana per lavori)
+        if (busMatch.index >= 0 && stopMatch.index >= 0 && busMatch.index < stopMatch.index && busMatch.distance < 350) {
+          const approachPts = shape.slice(busMatch.index, stopMatch.index + 1);
+          if (approachPts.length >= 2) {
+            // Casing bianco sotto
+            L.polyline(approachPts, {
+              color: '#FFFFFF',
+              weight: 9.5,
+              opacity: 0.95,
+              lineCap: 'round',
+              lineJoin: 'round'
+            }).addTo(state.approachRouteGroup);
+
+            // Tratto blu acceso Google Maps Transit sopra
+            L.polyline(approachPts, {
+              color: '#1A73E8',
+              weight: 6.5,
+              opacity: 1,
+              lineCap: 'round',
+              lineJoin: 'round'
+            }).addTo(state.approachRouteGroup);
+          }
+        }
+      }
+
+      /* ========================================================================
+         3. LOCALIZZAZIONE UTENTE
          ======================================================================== */
       function initUserLocation() {
         if (!('geolocation' in navigator)) return;
@@ -325,7 +497,6 @@
         navigator.geolocation.getCurrentPosition(
           (pos) => {
             const { latitude, longitude, accuracy } = pos.coords;
-            // Se accuratezza > 400m (tipico IP desktop o proxy), non forzare posizione fasulla
             if (accuracy <= 400) {
               updateUserLocation(latitude, longitude);
               autoSelectNearestStop(latitude, longitude);
@@ -399,7 +570,7 @@
       }
 
       /* ========================================================================
-         3. CARICAMENTO DATI STATICI DA API
+         4. CARICAMENTO DATI STATICI DA API
          ======================================================================== */
       async function loadStaticStops() {
         try {
@@ -409,6 +580,7 @@
 
           renderStopSelectOptions();
           renderStopsOnMap();
+          renderRouteGeometry();
           fetchArrivalsForStop();
           fetchLiveBuses();
         } catch (err) {
@@ -427,7 +599,6 @@
           </option>
         `).join('');
 
-        // Se la fermata precedentemente selezionata non esiste in questa direzione, prendi la prima
         if (!stops.some(s => String(s.stop_id) === String(state.selectedStopId)) && stops.length > 0) {
           state.selectedStopId = stops[0].stop_id;
           sel.value = stops[0].stop_id;
@@ -437,7 +608,7 @@
       }
 
       /* ========================================================================
-         4. DISEGNO FERMATE SULLA MAPPA (ZERO LINEE AZZURRE PRETRACCIATE)
+         5. DISEGNO FERMATE SULLA MAPPA
          ======================================================================== */
       function renderStopsOnMap() {
         state.stopsGroup.clearLayers();
@@ -458,7 +629,6 @@
             marker.on('click', () => selectStop(s.stop_id));
             marker.addTo(state.stopsGroup);
           } else {
-            // Cerchietto bianco discreto
             const circle = L.circleMarker([s.lat, s.lon], {
               radius: 5,
               fillColor: '#ffffff',
@@ -473,6 +643,7 @@
         });
 
         updateWalkPathToSelectedStop();
+        updateApproachRouteHighlight();
       }
 
       function selectStop(stopId) {
@@ -484,7 +655,7 @@
       }
 
       /* ========================================================================
-         5. FETCH ARRIVI IN TEMPO REALE (/api/linea6/arrivals)
+         6. FETCH ARRIVI IN TEMPO REALE (/api/linea6/arrivals)
          ======================================================================== */
       async function fetchArrivalsForStop() {
         if (!state.selectedStopId) return;
@@ -499,6 +670,7 @@
           const data = await res.json();
           state.arrivalsData = data;
           updateHeroArrivalUI(data);
+          updateApproachRouteHighlight();
         } catch (err) {
           console.error('Errore fetch arrivals:', err);
         }
@@ -515,7 +687,6 @@
         updateCollapsedSummary();
 
         if (!arrivals.length) {
-          // ZERO SIMULATORI: Messaggio onesto
           heroEta.textContent = 'Nessun bus';
           heroTimes.innerHTML = `<span class="text-amber-300 font-semibold">Nessun autobus Linea 6 in arrivo al momento</span>`;
           heroVehicle.textContent = 'Fuori servizio';
@@ -524,7 +695,6 @@
           return;
         }
 
-        // Prima corsa in arrivo
         const first = arrivals[0];
         const isCancelled = first.is_cancelled;
         const eta = first.eta_minutes;
@@ -532,7 +702,6 @@
         const schedTime = first.scheduled_time || '';
         const liveTime = first.live_time || schedTime;
 
-        // Matricola Bus
         heroVehicle.textContent = first.vehicle_id ? `Bus #${first.vehicle_id}` : `Corsa ${first.trip_id}`;
 
         if (isCancelled) {
@@ -540,7 +709,6 @@
           heroEta.className = 'text-2xl font-black text-rose-400 tracking-tight';
           heroTimes.innerHTML = `<span class="inline-flex items-center gap-1 px-2.5 py-1 rounded-xl bg-rose-500/20 text-rose-300 font-extrabold text-xs border border-rose-500/30">⚠️ CORSA SOPPRESSA (${schedTime})</span>`;
         } else {
-          // Minuti in evidenza
           if (eta <= 0) {
             heroEta.textContent = 'In arrivo';
             heroEta.className = 'text-3xl font-black text-emerald-400 tracking-tight animate-pulse';
@@ -549,53 +717,72 @@
             heroEta.className = 'text-3xl font-black text-white tracking-tight';
           }
 
-          // Dettaglio orario programmato vs reale e badge ritardo/anticipo
           let timeDisplay = '';
           let delayBadge = '';
 
           if (delay > 0) {
             timeDisplay = `<span class="text-slate-300">Arrivo: <s class="opacity-60 text-slate-400 mr-1">${schedTime}</s><strong class="text-white">${liveTime}</strong></span>`;
-            delayBadge = `<span class="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-500/20 text-amber-300 border border-amber-500/30">+${delay} min ritardo</span>`;
+            delayBadge = `<span class="inline-flex items-center px-2 py-0.5 rounded-md text-[11px] font-bold bg-amber-500/20 text-amber-300 border border-amber-500/30">+${delay} min ritardo</span>`;
           } else if (delay < 0) {
             timeDisplay = `<span class="text-slate-300">Arrivo: <s class="opacity-60 text-slate-400 mr-1">${schedTime}</s><strong class="text-white">${liveTime}</strong></span>`;
-            delayBadge = `<span class="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">${delay} min anticipo</span>`;
+            delayBadge = `<span class="inline-flex items-center px-2 py-0.5 rounded-md text-[11px] font-bold bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">${delay} min anticipo</span>`;
           } else {
-            timeDisplay = `<span class="text-slate-300">Arrivo: <strong class="text-white">${liveTime}</strong></span>`;
-            delayBadge = `<span class="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">In orario</span>`;
+            timeDisplay = `<span class="text-slate-300">Arrivo: <strong class="text-white">${liveTime || schedTime}</strong></span>`;
+            delayBadge = `<span class="inline-flex items-center px-2 py-0.5 rounded-md text-[11px] font-bold bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">In orario</span>`;
           }
 
-          heroTimes.innerHTML = `<div class="flex items-center gap-2 flex-wrap">${timeDisplay} ${delayBadge}</div>`;
+          heroTimes.innerHTML = `
+            ${timeDisplay}
+            ${delayBadge}
+          `;
         }
 
-        // Stato cammino passeggero
-        const walkMin = first.walking_minutes || 1;
-        if (first.can_catch) {
-          heroWalk.innerHTML = `
-            <span class="inline-block px-2.5 py-1 rounded-xl text-xs font-bold bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
-              🟢 Ce la fai (${walkMin} min a piedi)
-            </span>
-          `;
+        // Calcolo tempo a piedi verso la fermata
+        const walkMin = data.walk_minutes || 0;
+        if (state.userPos) {
+          if (walkMin <= eta) {
+            heroWalk.innerHTML = `
+              <span class="inline-block px-2.5 py-1 rounded-xl text-xs font-bold bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
+                🟢 ${walkMin} min a piedi
+              </span>
+            `;
+          } else {
+            heroWalk.innerHTML = `
+              <span class="inline-block px-2.5 py-1 rounded-xl text-xs font-bold bg-rose-500/20 text-rose-300 border border-rose-500/30">
+                🔴 Esci ora! (${walkMin}m)
+              </span>
+            `;
+          }
         } else {
           heroWalk.innerHTML = `
-            <span class="inline-block px-2.5 py-1 rounded-xl text-xs font-bold bg-rose-500/20 text-rose-300 border border-rose-500/30">
-              🔴 Troppo vicino (${walkMin} min a piedi)
+            <span class="inline-block px-2.5 py-1 rounded-xl text-xs font-bold bg-slate-700 text-slate-300">
+              Linea 6
             </span>
           `;
         }
 
-        // Corse successive (mostra orario barrato se ritardo/anticipo)
+        // Corse successive
         const subsequent = arrivals.slice(1, 4);
-        if (subsequent.length > 0) {
+        if (subsequent.length) {
           upcomingList.innerHTML = subsequent.map(arr => {
             const arrDelay = arr.delay_minutes || 0;
+            let timeStr = `<span>${arr.scheduled_time}</span>`;
             let delayTag = '';
-            let timeStr = `<span class="font-bold text-white">${arr.live_time}</span>`;
+
+            if (arr.is_cancelled) {
+              return `
+                <div class="flex items-center justify-between py-1.5 border-b border-slate-800 last:border-0 text-slate-400">
+                  <span class="line-through">${arr.scheduled_time}</span>
+                  <span class="text-rose-400 font-bold text-[11px]">SOPPRESSA</span>
+                </div>
+              `;
+            }
 
             if (arrDelay > 0) {
-              timeStr = `<s class="text-slate-500 text-[11px] mr-1">${arr.scheduled_time}</s><span class="font-bold text-white">${arr.live_time}</span>`;
+              timeStr = `<span class="line-through opacity-50">${arr.scheduled_time}</span> <span class="font-bold text-white">${arr.live_time}</span>`;
               delayTag = `<span class="text-[10px] font-bold text-amber-300 bg-amber-500/20 px-1.5 py-0.5 rounded border border-amber-500/30">+${arrDelay}m</span>`;
             } else if (arrDelay < 0) {
-              timeStr = `<s class="text-slate-500 text-[11px] mr-1">${arr.scheduled_time}</s><span class="font-bold text-white">${arr.live_time}</span>`;
+              timeStr = `<span class="line-through opacity-50">${arr.scheduled_time}</span> <span class="font-bold text-white">${arr.live_time}</span>`;
               delayTag = `<span class="text-[10px] font-bold text-emerald-300 bg-emerald-500/20 px-1.5 py-0.5 rounded border border-emerald-500/30">${arrDelay}m</span>`;
             }
 
@@ -636,7 +823,7 @@
       }
 
       /* ========================================================================
-         6. FETCH E RENDERING AUTOBUS REALI (/api/linea6/live)
+         7. FETCH E RENDERING AUTOBUS REALI (/api/linea6/live)
          ======================================================================== */
       async function fetchLiveBuses() {
         try {
@@ -644,6 +831,7 @@
           const data = await res.json();
           state.liveBuses = data?.buses || [];
           renderLiveBusesOnMap(state.liveBuses);
+          updateApproachRouteHighlight();
         } catch (err) {
           console.error('Errore fetch live buses:', err);
         }
@@ -662,9 +850,9 @@
           }
         }
 
-        // Disegna o aggiorna ogni autobus reale della direzione attiva
+        // Posizionamento 2D libero senza snap: l'autobus va direttamente alle sue coordinate GPS
         filteredBuses.forEach(b => {
-          const bgCol = '#E30613'; // Solo bus rossi della direzione attiva
+          const bgCol = '#E30613';
           const vehicleText = b.vehicle_id && b.vehicle_id !== 'N.D.' ? `#${b.vehicle_id}` : '';
           const rotAngle = b.bearing || 0;
 
@@ -705,11 +893,9 @@
       }
 
       function fitBusesOnMap() {
-        // Considera solo i bus della direzione attiva
         const activeBuses = (state.liveBuses || []).filter(b => String(b.direction_id) === String(state.direction));
 
         if (!activeBuses.length) {
-          // Se non ci sono bus in marcia in questo senso, centra sulla fermata selezionata o sulle fermate della linea
           if (state.selectedStopId && state.staticData) {
             const stops = state.staticData.routes_by_direction?.[state.direction]?.stops || [];
             const s = stops.find(st => String(st.stop_id) === String(state.selectedStopId));
@@ -737,7 +923,7 @@
       }
 
       /* ========================================================================
-         7. EVENTI UI & GESTIONE BOTTOM SHEET
+         8. EVENTI UI & GESTIONE BOTTOM SHEET
          ======================================================================== */
       function bindEvents() {
         // Toggle tab direzione
@@ -750,12 +936,12 @@
           tab0.className = 'py-2.5 px-3 rounded-xl font-bold text-xs transition flex items-center justify-center gap-1.5 bg-[#E30613] text-white shadow-sm';
           tab1.className = 'py-2.5 px-3 rounded-xl font-bold text-xs transition flex items-center justify-center gap-1.5 text-slate-600 hover:text-slate-900';
 
-          // Rimuovi immediatamente dalla mappa tutti i marker dei bus della direzione precedente
           state.busesGroup.clearLayers();
           state.busMarkers.clear();
 
           renderStopSelectOptions();
           renderStopsOnMap();
+          renderRouteGeometry();
           fetchArrivalsForStop();
           renderLiveBusesOnMap(state.liveBuses);
         });
@@ -766,12 +952,12 @@
           tab1.className = 'py-2.5 px-3 rounded-xl font-bold text-xs transition flex items-center justify-center gap-1.5 bg-[#E30613] text-white shadow-sm';
           tab0.className = 'py-2.5 px-3 rounded-xl font-bold text-xs transition flex items-center justify-center gap-1.5 text-slate-600 hover:text-slate-900';
 
-          // Rimuovi immediatamente dalla mappa tutti i marker dei bus della direzione precedente
           state.busesGroup.clearLayers();
           state.busMarkers.clear();
 
           renderStopSelectOptions();
           renderStopsOnMap();
+          renderRouteGeometry();
           fetchArrivalsForStop();
           renderLiveBusesOnMap(state.liveBuses);
         });
@@ -808,10 +994,17 @@
 
         // Pulsante Inquadra Bus (Inquadra solo la direzione selezionata)
         document.getElementById('btnFitBuses')?.addEventListener('click', fitBusesOnMap);
+
+        // Pulsante Mostra/Nascondi Tracciato Percorso
+        document.getElementById('btnToggleRoute')?.addEventListener('click', () => {
+          state.routeVisible = !state.routeVisible;
+          localStorage.setItem('cesena_linea6_route_visible', state.routeVisible ? 'true' : 'false');
+          renderRouteGeometry();
+        });
       }
 
       /* ========================================================================
-         8. AVVIO APPLICAZIONE
+         9. AVVIO APPLICAZIONE
          ======================================================================== */
       window.addEventListener('DOMContentLoaded', () => {
         initMap();
