@@ -101,8 +101,8 @@ async function run() {
   console.log('Navigazione a http://localhost:3000...');
   await pageSend('Page.navigate', { url: 'http://localhost:3000' });
 
-  // Attesa per completamento rendering e chiamate alle API
-  await new Promise(r => setTimeout(r, 4000));
+  // Attesa per completamento rendering e chiamate alle API reali
+  await new Promise(r => setTimeout(r, 4500));
 
   const evalResult = await pageSend('Runtime.evaluate', {
     expression: `(() => {
@@ -117,6 +117,11 @@ async function run() {
       const busMarkers = document.querySelectorAll('.bus-marker-wrap').length;
       const sheetIsCollapsed = document.getElementById('bottomSheet')?.classList.contains('collapsed');
 
+      // Verifica che i tab siano nel blocco superiore e NON dentro #bottomSheetContent (quindi mai tagliati dallo scroll)
+      const tabsInsideScroll = document.getElementById('bottomSheetContent')?.contains(document.getElementById('directionTabsContainer'));
+      const tab0Text = document.getElementById('tabDir0')?.innerText?.trim();
+      const tab1Text = document.getElementById('tabDir1')?.innerText?.trim();
+
       return {
         hasLeafletMap,
         optionsCount,
@@ -126,6 +131,9 @@ async function run() {
         heroTimes,
         heroVehicle,
         busMarkers,
+        tabsAreStickyInTopBlock: !tabsInsideScroll,
+        tab0Text,
+        tab1Text,
         sheetIsCollapsed
       };
     })()`,
@@ -136,7 +144,7 @@ async function run() {
   console.log(JSON.stringify(evalResult.result?.value || evalResult.result || evalResult, null, 2));
 
   // Test switch direzione ➔ Rio Maggiore
-  console.log('\nTest switch direzione a "Rio Maggiore"...');
+  console.log('\nTest switch direzione a "➔ Verso Rio Maggiore"...');
   await pageSend('Runtime.evaluate', {
     expression: `document.getElementById('tabDir1')?.click()`
   });
@@ -145,9 +153,11 @@ async function run() {
   const afterSwitch = await pageSend('Runtime.evaluate', {
     expression: `(() => {
       const stopSelect = document.getElementById('stopSelect');
+      const busMarkers = document.querySelectorAll('.bus-marker-wrap').length;
       return {
         direction1OptionsCount: stopSelect?.options?.length || 0,
-        selectedStopText: stopSelect?.options[stopSelect.selectedIndex]?.text
+        selectedStopText: stopSelect?.options[stopSelect.selectedIndex]?.text,
+        busMarkersDir1: busMarkers
       };
     })()`,
     returnByValue: true
@@ -176,7 +186,7 @@ async function run() {
     console.error('\n[ATTENZIONE] Trovati errori console:', realErrors);
     process.exit(1);
   } else {
-    console.log('\n[SUCCESSO] 0 errori in console! Tutti i test della nuova interfaccia superati.');
+    console.log('\n[SUCCESSO] 0 errori in console! Tutti i test delle 3 rifiniture superati.');
   }
 }
 

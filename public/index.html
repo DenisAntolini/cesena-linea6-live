@@ -129,7 +129,7 @@
       box-shadow: 0 0 0 4px rgba(37, 99, 235, 0.3);
     }
 
-    /* Bottom Sheet per iPhone */
+    /* Bottom Sheet per iPhone & Desktop: flex flex-col con blocco superiore fisso */
     #bottomSheet {
       position: fixed;
       bottom: 0;
@@ -144,12 +144,16 @@
       box-shadow: 0 -8px 30px rgba(15, 23, 42, 0.15);
       z-index: 1000;
       transition: max-height 0.3s cubic-bezier(0.16, 1, 0.3, 1), transform 0.3s ease;
-      max-height: 48vh;
+      max-height: 52vh;
       display: flex;
       flex-direction: column;
+      overflow: hidden;
     }
     #bottomSheet.collapsed {
       max-height: 84px !important;
+    }
+    #bottomSheet.collapsed #directionTabsContainer {
+      display: none !important;
     }
     #bottomSheetContent {
       overflow-y: auto;
@@ -170,7 +174,7 @@
         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 2v2m0 16v2m10-10h-2M4 12H2m15.071-7.071l-1.414 1.414M8.343 15.657l-1.414 1.414m0-11.314l1.414 1.414m7.314 7.314l1.414 1.414M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
       </svg>
     </button>
-    <!-- Inquadra Bus in circolazione -->
+    <!-- Inquadra Bus in circolazione (Solo direzione attiva) -->
     <button id="btnFitBuses" title="Inquadra Autobus" class="w-12 h-12 bg-white/95 backdrop-blur-md rounded-2xl shadow-lg border border-slate-100 flex items-center justify-center text-slate-700 active:scale-95 transition hover:bg-slate-50">
       <svg class="w-6 h-6 text-[#E30613]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7h8m-8 4h8m-9 8h10a2 2 0 002-2V6a2 2 0 00-2-2H7a2 2 0 00-2 2v11a2 2 0 002 2zm1-2a1 1 0 100-2 1 1 0 000 2zm8 0a1 1 0 100-2 1 1 0 000 2z" />
@@ -178,33 +182,36 @@
     </button>
   </div>
 
-  <!-- Bottom Sheet Transit iOS Safari Mobile-First -->
-  <aside id="bottomSheet" class="p-4 pb-6 border-t border-slate-100">
-    <!-- Maniglia Sticky (Cliccabile per aprire/chiudere) -->
-    <div id="sheetHandle" class="w-full flex flex-col items-center cursor-pointer select-none pb-2 shrink-0">
-      <div class="w-11 h-1.5 bg-slate-300 rounded-full mb-1.5"></div>
-      <!-- Barra di sintesi visibile quando la card è chiusa -->
-      <div id="collapsedSummary" class="hidden w-full flex items-center justify-between px-1 text-xs">
-        <div class="flex items-center gap-2">
-          <span class="w-6 h-6 rounded-lg bg-[#E30613] text-white font-extrabold flex items-center justify-center text-xs">6</span>
-          <span id="collapsedStopText" class="font-bold text-slate-800 truncate max-w-[200px]">Caricamento...</span>
+  <!-- Bottom Sheet Transit iOS Safari Mobile-First: Flex Col con Tab Fissi in Cima -->
+  <aside id="bottomSheet" class="p-4 pb-4 border-t border-slate-100 flex flex-col overflow-hidden">
+    <!-- Blocco Fisso Superiore (shrink-0): non scorre mai via -->
+    <div class="shrink-0 w-full select-none">
+      <!-- Maniglia Sticky (Cliccabile per aprire/chiudere) -->
+      <div id="sheetHandle" class="w-full flex flex-col items-center cursor-pointer pb-2">
+        <div class="w-11 h-1.5 bg-slate-300 rounded-full mb-1.5"></div>
+        <!-- Barra di sintesi visibile solo quando il pannello è chiuso -->
+        <div id="collapsedSummary" class="hidden w-full flex items-center justify-between px-1 text-xs">
+          <div class="flex items-center gap-2">
+            <span class="w-6 h-6 rounded-lg bg-[#E30613] text-white font-extrabold flex items-center justify-center text-xs">6</span>
+            <span id="collapsedStopText" class="font-bold text-slate-800 truncate max-w-[200px]">Caricamento...</span>
+          </div>
+          <span id="collapsedEtaText" class="font-extrabold text-[#E30613] text-sm">--</span>
         </div>
-        <span id="collapsedEtaText" class="font-extrabold text-[#E30613] text-sm">--</span>
+      </div>
+
+      <!-- 1. TAB DIREZIONE SEMPRE FISSI IN CIMA AL PANNELLO (Zero tagli con lo scroll) -->
+      <div id="directionTabsContainer" class="grid grid-cols-2 gap-2 p-1 bg-slate-100 rounded-2xl mb-3">
+        <button id="tabDir0" class="py-2.5 px-3 rounded-xl font-bold text-xs transition flex items-center justify-center gap-1.5 bg-[#E30613] text-white shadow-sm">
+          <span>➔ Verso Montefiore</span>
+        </button>
+        <button id="tabDir1" class="py-2.5 px-3 rounded-xl font-bold text-xs transition flex items-center justify-center gap-1.5 text-slate-600 hover:text-slate-900">
+          <span>➔ Verso Rio Maggiore</span>
+        </button>
       </div>
     </div>
 
-    <!-- Contenuto scrollabile del Bottom Sheet -->
-    <div id="bottomSheetContent" class="space-y-3.5 pr-0.5">
-
-      <!-- 1. SELETTORE DIREZIONE (2 Tab Grandi e Chiare) -->
-      <div class="grid grid-cols-2 gap-2 p-1 bg-slate-100 rounded-2xl">
-        <button id="tabDir0" class="py-2.5 px-3 rounded-xl font-bold text-xs transition flex items-center justify-center gap-1.5 bg-[#E30613] text-white shadow-sm">
-          <span>➔ Montefiore</span>
-        </button>
-        <button id="tabDir1" class="py-2.5 px-3 rounded-xl font-bold text-xs transition flex items-center justify-center gap-1.5 text-slate-600 hover:text-slate-900">
-          <span>➔ Rio Maggiore</span>
-        </button>
-      </div>
+    <!-- Contenuto scrollabile del Bottom Sheet (Fermata, Hero Card, Corse Successive) -->
+    <div id="bottomSheetContent" class="flex-1 overflow-y-auto space-y-3.5 pr-0.5 pb-2">
 
       <!-- 2. SELETTORE FERMATA (Select Grande) -->
       <div>
@@ -219,7 +226,7 @@
         </div>
       </div>
 
-      <!-- 3. HERO CARD: PROSSIMO 6 REALE -->
+      <!-- 3. HERO CARD: PROSSIMO 6 REALE (Con Ritardo / Anticipo Reale) -->
       <div id="heroCard" class="bg-gradient-to-br from-slate-900 to-slate-800 text-white rounded-3xl p-4 shadow-xl border border-slate-700/50">
         <!-- Header Hero -->
         <div class="flex items-center justify-between pb-2 border-b border-slate-700/60 text-xs">
@@ -238,7 +245,8 @@
             <div id="heroEtaBig" class="text-3xl font-black tracking-tight text-white">
               --
             </div>
-            <div id="heroTimesLine" class="text-xs text-slate-300 mt-1 flex items-center gap-1.5">
+            <!-- Dettaglio Orario con Ritardo/Anticipo reale -->
+            <div id="heroTimesLine" class="text-xs text-slate-300 mt-1 flex items-center gap-1.5 flex-wrap">
               <span>Previsto: --:--</span>
             </div>
           </div>
@@ -250,7 +258,7 @@
           </div>
         </div>
 
-        <!-- Sezione Prossime Corse Compatta -->
+        <!-- Sezione Prossime Corse Compatta (Con indicatore di ritardo) -->
         <div class="pt-2 border-t border-slate-700/60">
           <div class="text-[10px] uppercase font-bold text-slate-400 mb-1.5">Corse successive oggi</div>
           <div id="upcomingTripsList" class="space-y-1.5 text-xs">
@@ -520,6 +528,9 @@
         const first = arrivals[0];
         const isCancelled = first.is_cancelled;
         const eta = first.eta_minutes;
+        const delay = first.delay_minutes || 0;
+        const schedTime = first.scheduled_time || '';
+        const liveTime = first.live_time || schedTime;
 
         // Matricola Bus
         heroVehicle.textContent = first.vehicle_id ? `Bus #${first.vehicle_id}` : `Corsa ${first.trip_id}`;
@@ -527,22 +538,33 @@
         if (isCancelled) {
           heroEta.textContent = 'SOPPRESSA';
           heroEta.className = 'text-2xl font-black text-rose-400 tracking-tight';
-          heroTimes.innerHTML = `<span class="text-rose-300 font-bold">⚠️ Corsa ${first.scheduled_time} annullata</span>`;
-        } else if (eta <= 0) {
-          heroEta.textContent = 'In arrivo';
-          heroEta.className = 'text-3xl font-black text-emerald-400 tracking-tight animate-pulse';
-          heroTimes.innerHTML = `<span>Orario: <strong class="text-white">${first.live_time}</strong></span>`;
+          heroTimes.innerHTML = `<span class="inline-flex items-center gap-1 px-2.5 py-1 rounded-xl bg-rose-500/20 text-rose-300 font-extrabold text-xs border border-rose-500/30">⚠️ CORSA SOPPRESSA (${schedTime})</span>`;
         } else {
-          heroEta.textContent = `tra ${eta} min`;
-          heroEta.className = 'text-3xl font-black text-white tracking-tight';
-
-          let timeHtml = `<span>Arrivo: <strong class="text-white">${first.live_time}</strong></span>`;
-          if (first.delay_minutes > 1) {
-            timeHtml += ` <span class="text-rose-400 font-bold ml-1">+${first.delay_minutes} min</span>`;
-          } else if (first.delay_minutes < -1) {
-            timeHtml += ` <span class="text-emerald-400 font-bold ml-1">${first.delay_minutes} min</span>`;
+          // Minuti in evidenza
+          if (eta <= 0) {
+            heroEta.textContent = 'In arrivo';
+            heroEta.className = 'text-3xl font-black text-emerald-400 tracking-tight animate-pulse';
+          } else {
+            heroEta.textContent = `tra ${eta} min`;
+            heroEta.className = 'text-3xl font-black text-white tracking-tight';
           }
-          heroTimes.innerHTML = timeHtml;
+
+          // Dettaglio orario programmato vs reale e badge ritardo/anticipo
+          let timeDisplay = '';
+          let delayBadge = '';
+
+          if (delay > 0) {
+            timeDisplay = `<span class="text-slate-300">Arrivo: <s class="opacity-60 text-slate-400 mr-1">${schedTime}</s><strong class="text-white">${liveTime}</strong></span>`;
+            delayBadge = `<span class="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-500/20 text-amber-300 border border-amber-500/30">+${delay} min ritardo</span>`;
+          } else if (delay < 0) {
+            timeDisplay = `<span class="text-slate-300">Arrivo: <s class="opacity-60 text-slate-400 mr-1">${schedTime}</s><strong class="text-white">${liveTime}</strong></span>`;
+            delayBadge = `<span class="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">${delay} min anticipo</span>`;
+          } else {
+            timeDisplay = `<span class="text-slate-300">Arrivo: <strong class="text-white">${liveTime}</strong></span>`;
+            delayBadge = `<span class="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">In orario</span>`;
+          }
+
+          heroTimes.innerHTML = `<div class="flex items-center gap-2 flex-wrap">${timeDisplay} ${delayBadge}</div>`;
         }
 
         // Stato cammino passeggero
@@ -561,20 +583,35 @@
           `;
         }
 
-        // Corse successive
+        // Corse successive (mostra orario barrato se ritardo/anticipo)
         const subsequent = arrivals.slice(1, 4);
         if (subsequent.length > 0) {
-          upcomingList.innerHTML = subsequent.map(arr => `
-            <div class="flex items-center justify-between py-1 border-b border-slate-800 last:border-0 text-slate-300">
-              <div class="flex items-center gap-2">
-                <span class="font-bold text-white">${arr.live_time}</span>
-                <span class="text-slate-400 text-[11px]">${arr.vehicle_id ? `#${arr.vehicle_id}` : ''}</span>
+          upcomingList.innerHTML = subsequent.map(arr => {
+            const arrDelay = arr.delay_minutes || 0;
+            let delayTag = '';
+            let timeStr = `<span class="font-bold text-white">${arr.live_time}</span>`;
+
+            if (arrDelay > 0) {
+              timeStr = `<s class="text-slate-500 text-[11px] mr-1">${arr.scheduled_time}</s><span class="font-bold text-white">${arr.live_time}</span>`;
+              delayTag = `<span class="text-[10px] font-bold text-amber-300 bg-amber-500/20 px-1.5 py-0.5 rounded border border-amber-500/30">+${arrDelay}m</span>`;
+            } else if (arrDelay < 0) {
+              timeStr = `<s class="text-slate-500 text-[11px] mr-1">${arr.scheduled_time}</s><span class="font-bold text-white">${arr.live_time}</span>`;
+              delayTag = `<span class="text-[10px] font-bold text-emerald-300 bg-emerald-500/20 px-1.5 py-0.5 rounded border border-emerald-500/30">${arrDelay}m</span>`;
+            }
+
+            return `
+              <div class="flex items-center justify-between py-1.5 border-b border-slate-800 last:border-0 text-slate-300">
+                <div class="flex items-center gap-1.5">
+                  ${timeStr}
+                  ${delayTag}
+                  <span class="text-slate-400 text-[11px] ml-1">${arr.vehicle_id ? `#${arr.vehicle_id}` : ''}</span>
+                </div>
+                <span class="font-bold text-emerald-400 text-[11px]">
+                  ${arr.eta_minutes !== null ? `tra ${arr.eta_minutes} min` : (arr.status_text || '')}
+                </span>
               </div>
-              <span class="font-bold text-emerald-400 text-[11px]">
-                ${arr.eta_minutes !== null ? `tra ${arr.eta_minutes} min` : arr.status_text}
-              </span>
-            </div>
-          `).join('');
+            `;
+          }).join('');
         } else {
           upcomingList.innerHTML = `<div class="text-slate-400 text-xs py-1">Nessun'altra corsa in coda.</div>`;
         }
@@ -612,9 +649,12 @@
         }
       }
 
-      function renderLiveBusesOnMap(buses) {
-        // Rimuovi bus che non sono più attivi
-        const activeIds = new Set(buses.map(b => b.id));
+      function renderLiveBusesOnMap(allBuses) {
+        // FILTRO RIGOROSO: Mostra SOLO i bus appartenenti alla direzione attualmente attiva
+        const filteredBuses = (allBuses || []).filter(b => String(b.direction_id) === String(state.direction));
+
+        // Rimuovi dalla mappa tutti i marker che non appartengono alla direzione attiva
+        const activeIds = new Set(filteredBuses.map(b => b.id));
         for (const [id, marker] of state.busMarkers.entries()) {
           if (!activeIds.has(id)) {
             state.busesGroup.removeLayer(marker);
@@ -622,10 +662,9 @@
           }
         }
 
-        // Disegna o aggiorna ogni autobus reale
-        buses.forEach(b => {
-          const isCurrentDir = b.direction_id === state.direction;
-          const bgCol = isCurrentDir ? '#E30613' : '#334155';
+        // Disegna o aggiorna ogni autobus reale della direzione attiva
+        filteredBuses.forEach(b => {
+          const bgCol = '#E30613'; // Solo bus rossi della direzione attiva
           const vehicleText = b.vehicle_id && b.vehicle_id !== 'N.D.' ? `#${b.vehicle_id}` : '';
           const rotAngle = b.bearing || 0;
 
@@ -666,8 +705,19 @@
       }
 
       function fitBusesOnMap() {
-        if (!state.liveBuses.length) {
-          // Se non ci sono bus, centra sulle fermate della direzione corrente
+        // Considera solo i bus della direzione attiva
+        const activeBuses = (state.liveBuses || []).filter(b => String(b.direction_id) === String(state.direction));
+
+        if (!activeBuses.length) {
+          // Se non ci sono bus in marcia in questo senso, centra sulla fermata selezionata o sulle fermate della linea
+          if (state.selectedStopId && state.staticData) {
+            const stops = state.staticData.routes_by_direction?.[state.direction]?.stops || [];
+            const s = stops.find(st => String(st.stop_id) === String(state.selectedStopId));
+            if (s) {
+              state.map.flyTo([s.lat, s.lon], 15, { duration: 0.6 });
+              return;
+            }
+          }
           const stops = state.staticData?.routes_by_direction?.[state.direction]?.stops || [];
           if (stops.length) {
             const bounds = L.latLngBounds(stops.map(s => [s.lat, s.lon]));
@@ -676,7 +726,7 @@
           return;
         }
 
-        const latlngs = state.liveBuses.map(b => [b.lat, b.lon]);
+        const latlngs = activeBuses.map(b => [b.lat, b.lon]);
         if (state.selectedStopId && state.staticData) {
           const stops = state.staticData.routes_by_direction?.[state.direction]?.stops || [];
           const s = stops.find(st => String(st.stop_id) === String(state.selectedStopId));
@@ -699,6 +749,11 @@
           state.direction = '0';
           tab0.className = 'py-2.5 px-3 rounded-xl font-bold text-xs transition flex items-center justify-center gap-1.5 bg-[#E30613] text-white shadow-sm';
           tab1.className = 'py-2.5 px-3 rounded-xl font-bold text-xs transition flex items-center justify-center gap-1.5 text-slate-600 hover:text-slate-900';
+
+          // Rimuovi immediatamente dalla mappa tutti i marker dei bus della direzione precedente
+          state.busesGroup.clearLayers();
+          state.busMarkers.clear();
+
           renderStopSelectOptions();
           renderStopsOnMap();
           fetchArrivalsForStop();
@@ -710,6 +765,11 @@
           state.direction = '1';
           tab1.className = 'py-2.5 px-3 rounded-xl font-bold text-xs transition flex items-center justify-center gap-1.5 bg-[#E30613] text-white shadow-sm';
           tab0.className = 'py-2.5 px-3 rounded-xl font-bold text-xs transition flex items-center justify-center gap-1.5 text-slate-600 hover:text-slate-900';
+
+          // Rimuovi immediatamente dalla mappa tutti i marker dei bus della direzione precedente
+          state.busesGroup.clearLayers();
+          state.busMarkers.clear();
+
           renderStopSelectOptions();
           renderStopsOnMap();
           fetchArrivalsForStop();
@@ -746,7 +806,7 @@
           }
         });
 
-        // Pulsante Inquadra Bus
+        // Pulsante Inquadra Bus (Inquadra solo la direzione selezionata)
         document.getElementById('btnFitBuses')?.addEventListener('click', fitBusesOnMap);
       }
 
