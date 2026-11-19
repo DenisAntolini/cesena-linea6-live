@@ -737,19 +737,39 @@
           `;
         }
 
-        // Calcolo tempo a piedi verso la fermata
-        const walkMin = data.walk_minutes || 0;
+        // Calcolo tempo a piedi verso la fermata con micro-fix > 20m / < 40m
+        const stops = state.staticData?.routes_by_direction?.[state.direction]?.stops || [];
+        const currentStop = stops.find(s => String(s.stop_id) === String(state.selectedStopId));
+        const walkDistM = (state.userPos && currentStop)
+          ? haversineMeters(state.userPos.lat, state.userPos.lon, currentStop.lat, currentStop.lon)
+          : (data.distance_meters || 0);
+
+        let walkText = '';
+        let walkMinNum = data.walk_minutes || 0;
+
+        if (walkDistM <= 20) {
+          walkText = 'Sei alla fermata';
+          walkMinNum = 0;
+        } else if (walkDistM < 40) {
+          walkText = '< 1 min a piedi';
+          walkMinNum = 1;
+        } else {
+          walkMinNum = Math.max(1, walkMinNum || Math.ceil(walkDistM / 80));
+          walkText = `${walkMinNum} min a piedi`;
+        }
+
         if (state.userPos) {
-          if (walkMin <= eta) {
+          if (walkMinNum <= eta) {
             heroWalk.innerHTML = `
               <span class="inline-block px-2.5 py-1 rounded-xl text-xs font-bold bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
-                🟢 ${walkMin} min a piedi
+                🟢 ${walkText}
               </span>
             `;
           } else {
+            const exitBadgeText = walkDistM < 40 ? 'Esci ora! (< 1m)' : `Esci ora! (${walkMinNum}m)`;
             heroWalk.innerHTML = `
               <span class="inline-block px-2.5 py-1 rounded-xl text-xs font-bold bg-rose-500/20 text-rose-300 border border-rose-500/30">
-                🔴 Esci ora! (${walkMin}m)
+                🔴 ${exitBadgeText}
               </span>
             `;
           }

@@ -1,0 +1,4 @@
+agency_id,agency_name,agency_url,agency_timezone,agency_lang
+fc:Start FOCE,Start Romagna S.p.A.,http://www.startromagna.it,Europe/Rome,it
+ra:START RA,Start Romagna S.p.A.,http://www.startromagna.it,Europe/Rome,it
+rn:START RN,Start Romagna S.p.A.,http://www.startromagna.it,Europe/Rome,it

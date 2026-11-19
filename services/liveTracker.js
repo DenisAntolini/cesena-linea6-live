@@ -88,6 +88,74 @@ function haversineMeters(lat1, lon1, lat2, lon2) {
 }
 
 /**
+ * Interpola una posizione lungo un sotto-tracciato polilinea per una frazione progress (0..1).
+ * Restituisce { lat, lon, bearing }.
+ */
+function interpolateAlongPath(subPath, progress) {
+  if (!subPath || subPath.length === 0) {
+    return { lat: 44.14000, lon: 12.24000, bearing: 0 };
+  }
+  if (subPath.length === 1 || progress <= 0) {
+    const p1 = subPath[0];
+    const p2 = subPath[1] || p1;
+    const bearing = calculateBearing(p1[0], p1[1], p2[0], p2[1]);
+    return { lat: p1[0], lon: p1[1], bearing };
+  }
+  if (progress >= 1) {
+    const pLast = subPath[subPath.length - 1];
+    const pPrev = subPath[subPath.length - 2] || pLast;
+    const bearing = calculateBearing(pPrev[0], pPrev[1], pLast[0], pLast[1]);
+    return { lat: pLast[0], lon: pLast[1], bearing };
+  }
+
+  // Calcola lunghezze geodetiche dei segmenti
+  const segDistances = [];
+  let totalDist = 0;
+  for (let i = 0; i < subPath.length - 1; i++) {
+    const d = haversineMeters(subPath[i][0], subPath[i][1], subPath[i + 1][0], subPath[i + 1][1]);
+    segDistances.push(d);
+    totalDist += d;
+  }
+
+  if (totalDist === 0) {
+    return { lat: subPath[0][0], lon: subPath[0][1], bearing: 0 };
+  }
+
+  const targetDist = progress * totalDist;
+  let accumulated = 0;
+
+  for (let i = 0; i < segDistances.length; i++) {
+    const segLen = segDistances[i];
+    if (accumulated + segLen >= targetDist || i === segDistances.length - 1) {
+      const segProgress = segLen > 0 ? Math.min(1, Math.max(0, (targetDist - accumulated) / segLen)) : 0;
+      const p1 = subPath[i];
+      const p2 = subPath[i + 1];
+      const lat = p1[0] + (p2[0] - p1[0]) * segProgress;
+      const lon = p1[1] + (p2[1] - p1[1]) * segProgress;
+      const bearing = calculateBearing(p1[0], p1[1], p2[0], p2[1]);
+      return { lat, lon, bearing };
+    }
+    accumulated += segLen;
+  }
+
+  const last = subPath[subPath.length - 1];
+  return { lat: last[0], lon: last[1], bearing: 0 };
+}
+
+function findClosestVertexIndex(shape, targetLat, targetLon, fromIndex = 0) {
+  let bestIdx = -1;
+  let minDist = Infinity;
+  for (let i = fromIndex; i < shape.length; i++) {
+    const d = haversineMeters(targetLat, targetLon, shape[i][0], shape[i][1]);
+    if (d < minDist) {
+      minDist = d;
+      bestIdx = i;
+    }
+  }
+  return { index: bestIdx, distance: minDist };
+}
+
+/**
  * Parsing robusto dello stato live restituito da Start Romagna.
  * Gestisce: "+ 2 minuti", "- 1 minuti", "11:45", "In arrivo", "SOPP", ecc.
  */
@@ -381,9 +449,40 @@ async function getRealLiveBuses(staticData) {
     const coordsA = stopA.coords || { lat: 44.14000, lon: 12.24000 };
     const coordsB = stopB.coords || coordsA;
 
-    const lat = coordsA.lat + (coordsB.lat - coordsA.lat) * progress;
-    const lon = coordsA.lon + (coordsB.lon - coordsA.lon) * progress;
-    const bearing = calculateBearing(coordsA.lat, coordsA.lon, coordsB.lat, coordsB.lon);
+    // Seleziona la polilinea reale per la direzione del bus
+    const dirId = String(tripMeta.direction_id || '0');
+    const shape = (dirId === '1' ? staticData.shape_dir_1 : staticData.shape_dir_0) ||
+                  staticData.routes_by_direction?.[dirId]?.shape || [];
+
+    let lat = coordsA.lat;
+    let lon = coordsA.lon;
+    let bearing = 0;
+
+    let pathInterpolated = false;
+    if (shape.length >= 2) {
+      const matchA = findClosestVertexIndex(shape, coordsA.lat, coordsA.lon, 0);
+      let matchB = findClosestVertexIndex(shape, coordsB.lat, coordsB.lon, matchA.index >= 0 ? matchA.index : 0);
+      if (matchB.index < matchA.index || matchB.distance > 200) {
+        matchB = findClosestVertexIndex(shape, coordsB.lat, coordsB.lon, 0);
+      }
+
+      // Se idxB > idxA ed entrambi gli stop sono entro 200 metri dalla polilinea, interpola lungo il tracciato reale
+      if (matchA.index >= 0 && matchB.index >= 0 && matchB.index > matchA.index && matchA.distance <= 200 && matchB.distance <= 200) {
+        const subPath = shape.slice(matchA.index, matchB.index + 1);
+        const interp = interpolateAlongPath(subPath, progress);
+        lat = interp.lat;
+        lon = interp.lon;
+        bearing = interp.bearing;
+        pathInterpolated = true;
+      }
+    }
+
+    // Fallback lineare estremo se la polilinea manca o non combacia
+    if (!pathInterpolated) {
+      lat = coordsA.lat + (coordsB.lat - coordsA.lat) * progress;
+      lon = coordsA.lon + (coordsB.lon - coordsA.lon) * progress;
+      bearing = calculateBearing(coordsA.lat, coordsA.lon, coordsB.lat, coordsB.lon);
+    }
 
     liveBuses.push({
       id: tripMeta.vehicle_id ? `bus_${tripMeta.vehicle_id}` : `trip_${tripId}`,
