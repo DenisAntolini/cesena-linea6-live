@@ -341,7 +341,7 @@
       const state = {
         map: null,
         direction: '0', // '0' = Montefiore, '1' = Rio Maggiore
-        selectedStopId: '6721', // Default Quasimodo (Campus Cesena)
+        selectedStopId: localStorage.getItem('cesena_linea6_selected_stop') || '6721', // Default Quasimodo (Campus Cesena)
         staticData: null,
         liveBuses: [],
         arrivalsData: null,
@@ -355,7 +355,10 @@
         stopsGroup: null,
         busesGroup: null,
         routeVisible: localStorage.getItem('cesena_linea6_route_visible') !== 'false',
-        pollTimer: null,
+        isFetchingLive: false,
+        isFetchingArrivals: false,
+        liveTimer: null,
+        arrivalsTimer: null,
         isCollapsed: false
       };
 
@@ -389,6 +392,48 @@
           return state.staticData[key];
         }
         return state.staticData.routes_by_direction?.[dir]?.shape || [];
+      }
+
+      /* ========================================================================
+         ANIMAZIONE FLUIDA MARKER AUTOBUS (Linear/Ease-out tra coordinate successive)
+         ======================================================================== */
+      function animateMarkerTo(marker, targetLat, targetLon, durationMs = 800) {
+        if (!marker) return;
+        if (marker._animFrameId) {
+          cancelAnimationFrame(marker._animFrameId);
+          marker._animFrameId = null;
+        }
+
+        const startPos = marker.getLatLng();
+        const startLat = startPos.lat;
+        const startLon = startPos.lng;
+        const startTime = performance.now();
+
+        // Se la variazione è trascurabile (< 0.5m) o grandissima (> 1km), posiziona direttamente
+        const d = Math.hypot(targetLat - startLat, targetLon - startLon);
+        if (d < 0.000005 || d > 0.01) {
+          marker.setLatLng([targetLat, targetLon]);
+          return;
+        }
+
+        function frame(now) {
+          const elapsed = now - startTime;
+          const progress = Math.min(1, elapsed / durationMs);
+          // Ease-out quadratico fluido
+          const ease = 1 - Math.pow(1 - progress, 2);
+
+          const curLat = startLat + (targetLat - startLat) * ease;
+          const curLon = startLon + (targetLon - startLon) * ease;
+          marker.setLatLng([curLat, curLon]);
+
+          if (progress < 1) {
+            marker._animFrameId = requestAnimationFrame(frame);
+          } else {
+            marker._animFrameId = null;
+          }
+        }
+
+        marker._animFrameId = requestAnimationFrame(frame);
       }
 
       /* ========================================================================
@@ -599,6 +644,9 @@
 
         if (closest && closest.stop_id !== state.selectedStopId) {
           state.selectedStopId = closest.stop_id;
+          try {
+            localStorage.setItem('cesena_linea6_selected_stop', String(closest.stop_id));
+          } catch (e) {}
           const sel = document.getElementById('stopSelect');
           if (sel) sel.value = closest.stop_id;
           renderStopsOnMap();
@@ -627,19 +675,37 @@
       }
 
       /* ========================================================================
-         4. CARICAMENTO DATI STATICI DA API
+         4. CARICAMENTO DATI STATICI (Cache istantanea in localStorage + background fetch)
          ======================================================================== */
       async function loadStaticStops() {
+        // Rendering istantaneo da localStorage se disponibile (< 0.2s)
+        const cached = localStorage.getItem('linea6_static_data_v2');
+        if (cached) {
+          try {
+            state.staticData = JSON.parse(cached);
+            renderStopSelectOptions();
+            renderStopsOnMap();
+            renderRouteGeometry();
+          } catch (e) {
+            console.warn('Cache statica corrotta:', e);
+          }
+        }
+
+        // Fetch asincrono di aggiornamento in background
         try {
           const res = await fetch('/api/linea6/static');
           const data = await res.json();
-          state.staticData = data;
-
-          renderStopSelectOptions();
-          renderStopsOnMap();
-          renderRouteGeometry();
-          fetchArrivalsForStop();
-          fetchLiveBuses();
+          const dataStr = JSON.stringify(data);
+          if (dataStr !== cached) {
+            state.staticData = data;
+            try {
+              localStorage.setItem('linea6_static_data_v2', dataStr);
+            } catch (e) {}
+            renderStopSelectOptions();
+            renderStopsOnMap();
+            renderRouteGeometry();
+            updateApproachRouteHighlight();
+          }
         } catch (err) {
           console.error('Errore caricamento dati statici:', err);
         }
@@ -713,6 +779,9 @@
 
       function selectStop(stopId) {
         state.selectedStopId = String(stopId);
+        try {
+          localStorage.setItem('cesena_linea6_selected_stop', state.selectedStopId);
+        } catch (e) {}
         const sel = document.getElementById('stopSelect');
         if (sel) sel.value = stopId;
         renderStopsOnMap();
@@ -723,7 +792,8 @@
          6. FETCH ARRIVI IN TEMPO REALE (/api/linea6/arrivals)
          ======================================================================== */
       async function fetchArrivalsForStop() {
-        if (!state.selectedStopId) return;
+        if (state.isFetchingArrivals || !state.selectedStopId) return;
+        state.isFetchingArrivals = true;
 
         let url = `/api/linea6/arrivals?stop_id=${state.selectedStopId}&direction=${state.direction}`;
         if (state.userPos) {
@@ -738,6 +808,8 @@
           updateApproachRouteHighlight();
         } catch (err) {
           console.error('Errore fetch arrivals:', err);
+        } finally {
+          state.isFetchingArrivals = false;
         }
       }
 
@@ -911,6 +983,9 @@
          7. FETCH E RENDERING AUTOBUS REALI (/api/linea6/live)
          ======================================================================== */
       async function fetchLiveBuses() {
+        if (state.isFetchingLive) return;
+        state.isFetchingLive = true;
+
         try {
           const res = await fetch('/api/linea6/live');
           const data = await res.json();
@@ -919,6 +994,8 @@
           updateApproachRouteHighlight();
         } catch (err) {
           console.error('Errore fetch live buses:', err);
+        } finally {
+          state.isFetchingLive = false;
         }
       }
 
@@ -930,6 +1007,10 @@
         const activeIds = new Set(filteredBuses.map(b => b.id));
         for (const [id, marker] of state.busMarkers.entries()) {
           if (!activeIds.has(id)) {
+            if (marker._animFrameId) {
+              cancelAnimationFrame(marker._animFrameId);
+              marker._animFrameId = null;
+            }
             state.busesGroup.removeLayer(marker);
             state.busMarkers.delete(id);
           }
@@ -980,8 +1061,8 @@
             state.busMarkers.set(b.id, marker);
           } else {
             const existing = state.busMarkers.get(b.id);
-            existing.setLatLng([b.lat, b.lon]);
             existing.setIcon(busIcon);
+            animateMarkerTo(existing, b.lat, b.lon, 800);
           }
         });
       }
@@ -1030,6 +1111,12 @@
           tab0.className = 'py-2.5 px-3 rounded-xl font-bold text-xs transition flex items-center justify-center gap-1.5 bg-[#E30613] text-white shadow-sm';
           tab1.className = 'py-2.5 px-3 rounded-xl font-bold text-xs transition flex items-center justify-center gap-1.5 text-slate-600 hover:text-slate-900';
 
+          for (const [id, marker] of state.busMarkers.entries()) {
+            if (marker._animFrameId) {
+              cancelAnimationFrame(marker._animFrameId);
+              marker._animFrameId = null;
+            }
+          }
           state.busesGroup.clearLayers();
           state.busMarkers.clear();
 
@@ -1046,6 +1133,12 @@
           tab1.className = 'py-2.5 px-3 rounded-xl font-bold text-xs transition flex items-center justify-center gap-1.5 bg-[#E30613] text-white shadow-sm';
           tab0.className = 'py-2.5 px-3 rounded-xl font-bold text-xs transition flex items-center justify-center gap-1.5 text-slate-600 hover:text-slate-900';
 
+          for (const [id, marker] of state.busMarkers.entries()) {
+            if (marker._animFrameId) {
+              cancelAnimationFrame(marker._animFrameId);
+              marker._animFrameId = null;
+            }
+          }
           state.busesGroup.clearLayers();
           state.busMarkers.clear();
 
@@ -1097,19 +1190,52 @@
         });
       }
 
+      function startPolling() {
+        stopPolling();
+        state.liveTimer = setInterval(() => {
+          fetchLiveBuses();
+        }, 5000);
+        state.arrivalsTimer = setInterval(() => {
+          fetchArrivalsForStop();
+        }, 15000);
+      }
+
+      function stopPolling() {
+        if (state.liveTimer) {
+          clearInterval(state.liveTimer);
+          state.liveTimer = null;
+        }
+        if (state.arrivalsTimer) {
+          clearInterval(state.arrivalsTimer);
+          state.arrivalsTimer = null;
+        }
+      }
+
       /* ========================================================================
-         9. AVVIO APPLICAZIONE
+         9. AVVIO APPLICAZIONE (Avvio istantaneo e richieste parallele)
          ======================================================================== */
       window.addEventListener('DOMContentLoaded', () => {
         initMap();
         bindEvents();
         loadStaticStops();
 
-        // Polling automatico dati reali ogni 20 secondi
-        state.pollTimer = setInterval(() => {
-          fetchLiveBuses();
-          fetchArrivalsForStop();
-        }, 20000);
+        // Richieste immediate in parallelo all'avvio (nessuna attesa GPS)
+        fetchLiveBuses();
+        fetchArrivalsForStop();
+
+        // Polling differenziato: bus ogni 5s, arrivi ogni 15s
+        startPolling();
+
+        // Risparmio energetico / background: pausa se nascosto, fetch immediato al risveglio
+        document.addEventListener('visibilitychange', () => {
+          if (document.hidden) {
+            stopPolling();
+          } else {
+            fetchLiveBuses();
+            fetchArrivalsForStop();
+            startPolling();
+          }
+        });
       });
     })();
   </script>

@@ -9,7 +9,7 @@ const path = require('path');
 const fs = require('fs');
 
 // Cache in memoria con TTL
-const STOP_BOARD_CACHE_TTL_MS = 20 * 1000; // 20 secondi per le paline
+const STOP_BOARD_CACHE_TTL_MS = 15 * 1000; // 15 secondi per le paline
 const PERCORSO_CACHE_TTL_MS = 10 * 60 * 1000; // 10 minuti per i percorsi dei trip
 const stopBoardCache = new Map();
 const percorsoCache = new Map();
@@ -237,7 +237,7 @@ async function fetchStopBoard(targetId, palina) {
 
   try {
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 6000);
+    const timeoutId = setTimeout(() => controller.abort(), 4500);
 
     const res = await fetch(url, {
       headers: {
@@ -324,14 +324,19 @@ async function fetchTripPercorso(tripId, palina = '6721') {
   }
 
   try {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 4000);
+
     const res = await fetch('https://infobus.startromagna.it/PercorsoService.asmx/GetPercorso', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json; charset=UTF-8',
         'X-Requested-With': 'XMLHttpRequest'
       },
-      body: JSON.stringify({ trip_id: tripId, palina: String(palina) })
+      body: JSON.stringify({ trip_id: tripId, palina: String(palina) }),
+      signal: controller.signal
     });
+    clearTimeout(timeoutId);
 
     const json = await res.json();
     const rawStops = typeof json.d === 'string' ? JSON.parse(json.d) : json.d;
@@ -366,15 +371,12 @@ async function getRealLiveBuses(staticData) {
     stopCoordsMap.set(String(s.stop_id), { lat: s.lat, lon: s.lon, stop_name: s.stop_name });
   });
 
-  // Fermate sonda per catturare tutti i bus in circolazione su entrambe le direzioni
+  // Sonde snelle e complete per catturare tutti i bus in circolazione su entrambe le direzioni
   const probeStops = [
     { target_id: '2985', palina: '6721' }, // Quasimodo (passano entrambe le direzioni)
-    { target_id: '2495', palina: '5161' }, // Cesena FS (dir. Montefiore)
-    { target_id: '2494', palina: '5160' }, // Cesena FS (dir. Rio Maggiore)
-    { target_id: '2602', palina: '5692' }, // Ghirotti Ospedale (dir. Montefiore)
-    { target_id: '2601', palina: '5691' }, // Ghirotti Ospedale (dir. Rio Maggiore)
-    { target_id: '2983', palina: '6700' }, // Rio Maggiore
-    { target_id: '2994', palina: '6770' }  // Montefiore
+    { target_id: '2495', palina: '5161' }, // Cesena FS dir 0
+    { target_id: '2494', palina: '5160' }, // Cesena FS dir 1
+    { target_id: '2602', palina: '5692' }  // Ghirotti Ospedale
   ];
 
   const boardResults = await Promise.allSettled(
@@ -386,6 +388,11 @@ async function getRealLiveBuses(staticData) {
     if (r.status === 'fulfilled' && Array.isArray(r.value)) {
       for (const item of r.value) {
         if (!item.trip_id || item.is_cancelled) continue;
+        // Pre-filtra subito corse troppo lontane nel futuro o concluse da molto
+        if (item.eta_minutes !== null && item.eta_minutes !== undefined) {
+          if (item.eta_minutes > 35 || item.eta_minutes < -15) continue;
+        }
+
         if (!activeTripsMap.has(item.trip_id)) {
           activeTripsMap.set(item.trip_id, item);
         } else {
@@ -403,9 +410,18 @@ async function getRealLiveBuses(staticData) {
   const currentTotalSeconds = nowRome.totalSeconds;
   const liveBuses = [];
 
-  for (const [tripId, tripMeta] of activeTripsMap.entries()) {
-    const rawPercorso = await fetchTripPercorso(tripId, tripMeta.palina || '6721');
-    if (!rawPercorso || rawPercorso.length < 2) continue;
+  // Scarica tutti i percorsi attivi in PARALLELO con Promise.allSettled (da ~15s a ~1s!)
+  const activeTripsList = Array.from(activeTripsMap.values());
+  const percorsoResults = await Promise.allSettled(
+    activeTripsList.map(t => fetchTripPercorso(t.trip_id, t.palina || '6721'))
+  );
+
+  for (let i = 0; i < activeTripsList.length; i++) {
+    const tripMeta = activeTripsList[i];
+    const tripId = tripMeta.trip_id;
+    const pRes = percorsoResults[i];
+    if (pRes.status !== 'fulfilled' || !pRes.value || pRes.value.length < 2) continue;
+    const rawPercorso = pRes.value;
 
     // Seleziona la direzione del bus e filtra rigorosamente le fermate su quelle note
     let resolvedDir = tripMeta.direction_id;
