@@ -89,23 +89,23 @@ function haversineMeters(lat1, lon1, lat2, lon2) {
 
 /**
  * Interpola una posizione lungo un sotto-tracciato polilinea per una frazione progress (0..1).
- * Restituisce { lat, lon, bearing, segmentIndex }.
+ * Restituisce { lat, lon, bearing, segmentIndex, segProgress }.
  */
 function interpolateAlongPath(subPath, progress) {
   if (!subPath || subPath.length === 0) {
-    return { lat: 44.14376, lon: 12.26062, bearing: 0, segmentIndex: 0 };
+    return { lat: 44.14376, lon: 12.26062, bearing: 0, segmentIndex: 0, segProgress: 0 };
   }
   if (subPath.length === 1 || progress <= 0) {
     const p1 = subPath[0];
     const p2 = subPath[1] || p1;
     const bearing = calculateBearing(p1[0], p1[1], p2[0], p2[1]);
-    return { lat: p1[0], lon: p1[1], bearing, segmentIndex: 0 };
+    return { lat: p1[0], lon: p1[1], bearing, segmentIndex: 0, segProgress: 0 };
   }
   if (progress >= 1) {
     const pLast = subPath[subPath.length - 1];
     const pPrev = subPath[subPath.length - 2] || pLast;
     const bearing = calculateBearing(pPrev[0], pPrev[1], pLast[0], pLast[1]);
-    return { lat: pLast[0], lon: pLast[1], bearing, segmentIndex: subPath.length - 1 };
+    return { lat: pLast[0], lon: pLast[1], bearing, segmentIndex: subPath.length - 1, segProgress: 0 };
   }
 
   // Calcola lunghezze geodetiche dei segmenti
@@ -118,7 +118,7 @@ function interpolateAlongPath(subPath, progress) {
   }
 
   if (totalDist === 0) {
-    return { lat: subPath[0][0], lon: subPath[0][1], bearing: 0, segmentIndex: 0 };
+    return { lat: subPath[0][0], lon: subPath[0][1], bearing: 0, segmentIndex: 0, segProgress: 0 };
   }
 
   const targetDist = progress * totalDist;
@@ -133,13 +133,13 @@ function interpolateAlongPath(subPath, progress) {
       const lat = p1[0] + (p2[0] - p1[0]) * segProgress;
       const lon = p1[1] + (p2[1] - p1[1]) * segProgress;
       const bearing = calculateBearing(p1[0], p1[1], p2[0], p2[1]);
-      return { lat, lon, bearing, segmentIndex: i };
+      return { lat, lon, bearing, segmentIndex: i, segProgress };
     }
     accumulated += segLen;
   }
 
   const last = subPath[subPath.length - 1];
-  return { lat: last[0], lon: last[1], bearing: 0, segmentIndex: subPath.length - 1 };
+  return { lat: last[0], lon: last[1], bearing: 0, segmentIndex: subPath.length - 1, segProgress: 0 };
 }
 
 function findClosestVertexIndex(shape, targetLat, targetLon, fromIndex = 0) {
@@ -515,6 +515,7 @@ async function getRealLiveBuses(staticData) {
     const idxA = stopA.shape_index;
     const idxB = stopB.shape_index;
     let busShapeIndex = idxA;
+    let exactShapePos = idxA;
 
     if (shape && shape.length >= 2) {
       if (idxA === idxB || idxB < idxA) {
@@ -522,6 +523,7 @@ async function getRealLiveBuses(staticData) {
         lat = pt[0];
         lon = pt[1];
         busShapeIndex = idxA;
+        exactShapePos = idxA;
         const nextPt = shape[Math.min(shape.length - 1, idxA + 1)] || pt;
         bearing = calculateBearing(pt[0], pt[1], nextPt[0], nextPt[1]);
       } else {
@@ -531,6 +533,7 @@ async function getRealLiveBuses(staticData) {
         lon = interp.lon;
         bearing = interp.bearing;
         busShapeIndex = idxA + interp.segmentIndex;
+        exactShapePos = Math.round((idxA + interp.segmentIndex + (interp.segProgress || 0)) * 1000) / 1000;
       }
     } else {
       lat = stopA.lat + (stopB.lat - stopA.lat) * progress;
@@ -548,6 +551,7 @@ async function getRealLiveBuses(staticData) {
       lon: Math.round(lon * 100000) / 100000,
       bearing,
       shape_index: busShapeIndex,
+      exact_shape_pos: exactShapePos,
       position_type: 'estimated_from_infobus',
       delay_minutes: tripMeta.delay_minutes || 0,
       status: statusText,

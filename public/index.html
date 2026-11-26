@@ -395,45 +395,41 @@
       }
 
       /* ========================================================================
-         ANIMAZIONE FLUIDA MARKER AUTOBUS (Linear/Ease-out tra coordinate successive)
+         ANIMAZIONE FLUIDA MARKER AUTOBUS (Lineare 1200ms con guardia no-op se fermo)
          ======================================================================== */
-      function animateMarkerTo(marker, targetLat, targetLon, durationMs = 800) {
+      function animateMarkerTo(marker, targetLat, targetLon, durationMs = 1200) {
         if (!marker) return;
-        if (marker._animFrameId) {
-          cancelAnimationFrame(marker._animFrameId);
-          marker._animFrameId = null;
+        const start = marker.getLatLng();
+        if (Math.abs(start.lat - targetLat) < 1e-6 && Math.abs(start.lng - targetLon) < 1e-6) {
+          return; // Bus fermo: non riavviare l'animazione
+        }
+        if (marker._rafId) {
+          cancelAnimationFrame(marker._rafId);
+          marker._rafId = null;
         }
 
-        const startPos = marker.getLatLng();
-        const startLat = startPos.lat;
-        const startLon = startPos.lng;
-        const startTime = performance.now();
-
-        // Se la variazione è trascurabile (< 0.5m) o grandissima (> 1km), posiziona direttamente
-        const d = Math.hypot(targetLat - startLat, targetLon - startLon);
-        if (d < 0.000005 || d > 0.01) {
+        // Teletrasporto immediato solo per riallineamenti oltre ~1km
+        if (Math.hypot(targetLat - start.lat, targetLon - start.lng) > 0.01) {
           marker.setLatLng([targetLat, targetLon]);
           return;
         }
 
-        function frame(now) {
-          const elapsed = now - startTime;
-          const progress = Math.min(1, elapsed / durationMs);
-          // Ease-out quadratico fluido
-          const ease = 1 - Math.pow(1 - progress, 2);
+        const startLat = start.lat;
+        const startLon = start.lng;
+        const startTime = performance.now();
 
-          const curLat = startLat + (targetLat - startLat) * ease;
-          const curLon = startLon + (targetLon - startLon) * ease;
-          marker.setLatLng([curLat, curLon]);
-
-          if (progress < 1) {
-            marker._animFrameId = requestAnimationFrame(frame);
+        function step(now) {
+          const t = Math.min(1, (now - startTime) / durationMs);
+          const lat = startLat + (targetLat - startLat) * t;
+          const lng = startLon + (targetLon - startLon) * t;
+          marker.setLatLng([lat, lng]);
+          if (t < 1) {
+            marker._rafId = requestAnimationFrame(step);
           } else {
-            marker._animFrameId = null;
+            marker._rafId = null;
           }
         }
-
-        marker._animFrameId = requestAnimationFrame(frame);
+        marker._rafId = requestAnimationFrame(step);
       }
 
       /* ========================================================================
@@ -983,17 +979,80 @@
       }
 
       /* ========================================================================
-         7. FETCH E RENDERING AUTOBUS REALI (/api/linea6/live)
+         7. FETCH, BLOCCO MONOTONO ANTI-RUBBERBANDING E RENDERING AUTOBUS REALI
          ======================================================================== */
+      let liveFetchSeq = 0;
+      let lastAppliedLiveSeq = 0;
+      const busProgressLock = new Map(); // trip_id -> { exactPos, lat, lon, bearing, updatedAt }
+
+      function applyMonotonicProgressLock(buses) {
+        const now = Date.now();
+        const seenKeys = new Set();
+
+        const stabilized = (buses || []).map(bus => {
+          const lockKey = bus.trip_id || bus.id;
+          seenKeys.add(lockKey);
+
+          const newPos = typeof bus.exact_shape_pos === 'number'
+            ? bus.exact_shape_pos
+            : (typeof bus.shape_index === 'number' ? bus.shape_index : null);
+
+          if (newPos === null) return bus;
+
+          const prev = busProgressLock.get(lockKey);
+          if (prev && newPos < prev.exactPos) {
+            const backDist = haversineMeters(bus.lat, bus.lon, prev.lat, prev.lon);
+            if (backDist <= 450) {
+              // Resta fermo sulla posizione più avanzata (aggiorna comunque ritardo e timestamp)
+              prev.updatedAt = now;
+              return {
+                ...bus,
+                lat: prev.lat,
+                lon: prev.lon,
+                bearing: prev.bearing,
+                shape_index: Math.floor(prev.exactPos),
+                exact_shape_pos: prev.exactPos
+              };
+            }
+          }
+
+          // Avanzamento normale o riallineamento reale > 450m
+          busProgressLock.set(lockKey, {
+            exactPos: newPos,
+            lat: bus.lat,
+            lon: bus.lon,
+            bearing: bus.bearing,
+            updatedAt: now
+          });
+          return bus;
+        });
+
+        // Pulizia trip scaduti da oltre 5 minuti
+        for (const [key, entry] of busProgressLock.entries()) {
+          if (!seenKeys.has(key) && now - entry.updatedAt > 5 * 60 * 1000) {
+            busProgressLock.delete(key);
+          }
+        }
+
+        return stabilized;
+      }
+
       async function fetchLiveBuses() {
-        if (state.isFetchingLive) return;
+        const seq = ++liveFetchSeq;
         state.isFetchingLive = true;
 
         try {
-          const res = await fetch('/api/linea6/live');
+          const res = await fetch(`/api/linea6/live?t=${Date.now()}`, { cache: 'no-store' });
+          if (!res.ok) return;
           const data = await res.json();
-          state.liveBuses = data?.buses || [];
-          renderLiveBusesOnMap(state.liveBuses);
+
+          // Scarta risposte lente arrivate fuori ordine
+          if (seq < lastAppliedLiveSeq) return;
+          lastAppliedLiveSeq = seq;
+
+          const stableBuses = applyMonotonicProgressLock(data?.buses || []);
+          state.liveBuses = stableBuses;
+          renderLiveBusesOnMap(stableBuses);
           updateApproachRouteHighlight();
         } catch (err) {
           console.error('Errore fetch live buses:', err);
@@ -1010,9 +1069,9 @@
         const activeIds = new Set(filteredBuses.map(b => b.id));
         for (const [id, marker] of state.busMarkers.entries()) {
           if (!activeIds.has(id)) {
-            if (marker._animFrameId) {
-              cancelAnimationFrame(marker._animFrameId);
-              marker._animFrameId = null;
+            if (marker._rafId) {
+              cancelAnimationFrame(marker._rafId);
+              marker._rafId = null;
             }
             state.busesGroup.removeLayer(marker);
             state.busMarkers.delete(id);
@@ -1044,13 +1103,6 @@
             </div>
           `;
 
-          const busIcon = L.divIcon({
-            className: 'bus-marker-container',
-            html: html,
-            iconSize: [52, 60],
-            iconAnchor: [26, 21]
-          });
-
           const buildBusPopupHtml = (bus) => `
             <div class="p-2 text-xs">
               <div class="font-extrabold text-sm text-[#E30613] mb-1">Linea 6 • ${bus.destination}</div>
@@ -1062,14 +1114,30 @@
           `;
 
           if (!state.busMarkers.has(b.id)) {
+            const busIcon = L.divIcon({
+              className: 'bus-marker-container',
+              html: html,
+              iconSize: [52, 60],
+              iconAnchor: [26, 21]
+            });
             const marker = L.marker([b.lat, b.lon], { icon: busIcon, zIndexOffset: 800 }).addTo(state.busesGroup);
+            marker._lastHtml = html;
             marker.bindPopup(buildBusPopupHtml(b));
             state.busMarkers.set(b.id, marker);
           } else {
             const existing = state.busMarkers.get(b.id);
-            existing.setIcon(busIcon);
+            if (existing._lastHtml !== html) {
+              const busIcon = L.divIcon({
+                className: 'bus-marker-container',
+                html: html,
+                iconSize: [52, 60],
+                iconAnchor: [26, 21]
+              });
+              existing.setIcon(busIcon);
+              existing._lastHtml = html;
+            }
             existing.setPopupContent(buildBusPopupHtml(b));
-            animateMarkerTo(existing, b.lat, b.lon, 800);
+            animateMarkerTo(existing, b.lat, b.lon, 1200);
           }
         });
       }
@@ -1112,16 +1180,18 @@
         const tab0 = document.getElementById('tabDir0');
         const tab1 = document.getElementById('tabDir1');
 
-        tab0?.addEventListener('click', () => {
-          if (state.direction === '0') return;
-          state.direction = '0';
-          tab0.className = 'py-2.5 px-3 rounded-xl font-bold text-xs transition flex items-center justify-center gap-1.5 bg-[#E30613] text-white shadow-sm';
-          tab1.className = 'py-2.5 px-3 rounded-xl font-bold text-xs transition flex items-center justify-center gap-1.5 text-slate-600 hover:text-slate-900';
+        const switchDirection = (newDir) => {
+          if (state.direction === newDir) return;
+          state.direction = newDir;
+          const activeCls = 'py-2.5 px-3 rounded-xl font-bold text-xs transition flex items-center justify-center gap-1.5 bg-[#E30613] text-white shadow-sm';
+          const idleCls = 'py-2.5 px-3 rounded-xl font-bold text-xs transition flex items-center justify-center gap-1.5 text-slate-600 hover:text-slate-900';
+          if (tab0) tab0.className = newDir === '0' ? activeCls : idleCls;
+          if (tab1) tab1.className = newDir === '1' ? activeCls : idleCls;
 
-          for (const [id, marker] of state.busMarkers.entries()) {
-            if (marker._animFrameId) {
-              cancelAnimationFrame(marker._animFrameId);
-              marker._animFrameId = null;
+          for (const [, marker] of state.busMarkers.entries()) {
+            if (marker._rafId) {
+              cancelAnimationFrame(marker._rafId);
+              marker._rafId = null;
             }
           }
           state.busesGroup.clearLayers();
@@ -1132,29 +1202,10 @@
           renderRouteGeometry();
           fetchArrivalsForStop();
           renderLiveBusesOnMap(state.liveBuses);
-        });
+        };
 
-        tab1?.addEventListener('click', () => {
-          if (state.direction === '1') return;
-          state.direction = '1';
-          tab1.className = 'py-2.5 px-3 rounded-xl font-bold text-xs transition flex items-center justify-center gap-1.5 bg-[#E30613] text-white shadow-sm';
-          tab0.className = 'py-2.5 px-3 rounded-xl font-bold text-xs transition flex items-center justify-center gap-1.5 text-slate-600 hover:text-slate-900';
-
-          for (const [id, marker] of state.busMarkers.entries()) {
-            if (marker._animFrameId) {
-              cancelAnimationFrame(marker._animFrameId);
-              marker._animFrameId = null;
-            }
-          }
-          state.busesGroup.clearLayers();
-          state.busMarkers.clear();
-
-          renderStopSelectOptions();
-          renderStopsOnMap();
-          renderRouteGeometry();
-          fetchArrivalsForStop();
-          renderLiveBusesOnMap(state.liveBuses);
-        });
+        tab0?.addEventListener('click', () => switchDirection('0'));
+        tab1?.addEventListener('click', () => switchDirection('1'));
 
         // Cambio fermata dal select
         document.getElementById('stopSelect')?.addEventListener('change', (e) => {
