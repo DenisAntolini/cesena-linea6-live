@@ -89,23 +89,23 @@ function haversineMeters(lat1, lon1, lat2, lon2) {
 
 /**
  * Interpola una posizione lungo un sotto-tracciato polilinea per una frazione progress (0..1).
- * Restituisce { lat, lon, bearing }.
+ * Restituisce { lat, lon, bearing, segmentIndex }.
  */
 function interpolateAlongPath(subPath, progress) {
   if (!subPath || subPath.length === 0) {
-    return { lat: 44.14376, lon: 12.26062, bearing: 0 };
+    return { lat: 44.14376, lon: 12.26062, bearing: 0, segmentIndex: 0 };
   }
   if (subPath.length === 1 || progress <= 0) {
     const p1 = subPath[0];
     const p2 = subPath[1] || p1;
     const bearing = calculateBearing(p1[0], p1[1], p2[0], p2[1]);
-    return { lat: p1[0], lon: p1[1], bearing };
+    return { lat: p1[0], lon: p1[1], bearing, segmentIndex: 0 };
   }
   if (progress >= 1) {
     const pLast = subPath[subPath.length - 1];
     const pPrev = subPath[subPath.length - 2] || pLast;
     const bearing = calculateBearing(pPrev[0], pPrev[1], pLast[0], pLast[1]);
-    return { lat: pLast[0], lon: pLast[1], bearing };
+    return { lat: pLast[0], lon: pLast[1], bearing, segmentIndex: subPath.length - 1 };
   }
 
   // Calcola lunghezze geodetiche dei segmenti
@@ -118,7 +118,7 @@ function interpolateAlongPath(subPath, progress) {
   }
 
   if (totalDist === 0) {
-    return { lat: subPath[0][0], lon: subPath[0][1], bearing: 0 };
+    return { lat: subPath[0][0], lon: subPath[0][1], bearing: 0, segmentIndex: 0 };
   }
 
   const targetDist = progress * totalDist;
@@ -133,13 +133,13 @@ function interpolateAlongPath(subPath, progress) {
       const lat = p1[0] + (p2[0] - p1[0]) * segProgress;
       const lon = p1[1] + (p2[1] - p1[1]) * segProgress;
       const bearing = calculateBearing(p1[0], p1[1], p2[0], p2[1]);
-      return { lat, lon, bearing };
+      return { lat, lon, bearing, segmentIndex: i };
     }
     accumulated += segLen;
   }
 
   const last = subPath[subPath.length - 1];
-  return { lat: last[0], lon: last[1], bearing: 0 };
+  return { lat: last[0], lon: last[1], bearing: 0, segmentIndex: subPath.length - 1 };
 }
 
 function findClosestVertexIndex(shape, targetLat, targetLon, fromIndex = 0) {
@@ -157,22 +157,21 @@ function findClosestVertexIndex(shape, targetLat, targetLon, fromIndex = 0) {
 
 /**
  * Parsing robusto dello stato live restituito da Start Romagna.
- * Gestisce: "+ 2 minuti", "- 1 minuti", "11:45", "In arrivo", "SOPP", ecc.
+ * Gestisce: "+ 2 minuti", "- 1 minuti", "11:45", "In arrivo", "SOPP", "No Info", ecc.
  */
 function parseStartRomagnaStatus(statusText, scheduledTimeStr, nowRome) {
   const schedMinutes = timeStrToMinutes(scheduledTimeStr);
   let liveMinutes = schedMinutes;
   let delayMinutes = 0;
   let statusClass = 'on-time';
-  let isCancelled = false;
+  let hasRealtime = false;
   const cleanText = (statusText || '').trim();
 
   if (/sopp/i.test(cleanText)) {
-    isCancelled = true;
-    statusClass = 'sopp';
     return {
-      isCancelled,
-      statusClass,
+      isCancelled: true,
+      hasRealtime: true,
+      statusClass: 'sopp',
       liveTimeStr: 'SOPP',
       liveMinutes: null,
       delayMinutes: 0,
@@ -183,6 +182,7 @@ function parseStartRomagnaStatus(statusText, scheduledTimeStr, nowRome) {
 
   const delayMatch = cleanText.match(/([+-]?\s*\d+)\s*min/i);
   if (delayMatch) {
+    hasRealtime = true;
     delayMinutes = parseInt(delayMatch[1].replace(/\s+/g, ''), 10) || 0;
     if (schedMinutes !== null) {
       liveMinutes = schedMinutes + delayMinutes;
@@ -190,6 +190,7 @@ function parseStartRomagnaStatus(statusText, scheduledTimeStr, nowRome) {
     if (delayMinutes > 2) statusClass = 'delayed';
     else if (delayMinutes < -1) statusClass = 'early';
   } else if (/^\d{1,2}:\d{2}$/.test(cleanText)) {
+    hasRealtime = true;
     const absMin = timeStrToMinutes(cleanText);
     if (absMin !== null && schedMinutes !== null) {
       liveMinutes = absMin;
@@ -197,6 +198,7 @@ function parseStartRomagnaStatus(statusText, scheduledTimeStr, nowRome) {
     }
     if (delayMinutes > 2) statusClass = 'delayed';
   } else if (/arriv/i.test(cleanText)) {
+    hasRealtime = true;
     liveMinutes = nowRome.totalMinutes;
     delayMinutes = schedMinutes !== null ? liveMinutes - schedMinutes : 0;
     statusClass = 'arriving';
@@ -211,7 +213,8 @@ function parseStartRomagnaStatus(statusText, scheduledTimeStr, nowRome) {
   const etaMinutes = liveMinutes !== null ? liveMinutes - nowRome.totalMinutes : null;
 
   return {
-    isCancelled,
+    isCancelled: false,
+    hasRealtime,
     statusClass,
     liveTimeStr,
     liveMinutes,
@@ -269,16 +272,11 @@ async function fetchStopBoard(targetId, palina) {
       const vehicleId = btn.attr('data-vehicle') || null;
 
       const destUpper = destText.toUpperCase();
-      let directionId = null;
-      if (destUpper.includes('MONTEFIORE')) {
-        directionId = '0';
-      } else if (destUpper.includes('RIO MAGGIORE')) {
-        directionId = '1';
-      } else if (tripId && /^F_A/i.test(tripId)) {
-        directionId = '0';
-      } else if (tripId && /^F_R/i.test(tripId)) {
-        directionId = '1';
-      }
+      const directionId = destUpper.includes('MONTEFIORE')
+        ? '0'
+        : destUpper.includes('RIO MAGGIORE')
+          ? '1'
+          : (/^F_A/i.test(tripId || '') ? '0' : (/^F_R/i.test(tripId || '') ? '1' : null));
 
       const parsedStatus = parseStartRomagnaStatus(statusText, scheduledTime, nowRome);
 
@@ -290,6 +288,7 @@ async function fetchStopBoard(targetId, palina) {
         live_time: parsedStatus.liveTimeStr,
         eta_minutes: parsedStatus.etaMinutes,
         delay_minutes: parsedStatus.delayMinutes,
+        has_realtime: parsedStatus.hasRealtime,
         status_text: parsedStatus.displayText,
         status_class: parsedStatus.statusClass,
         is_cancelled: parsedStatus.isCancelled,
@@ -323,10 +322,9 @@ async function fetchTripPercorso(tripId, palina = '6721') {
     return cached.stops;
   }
 
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 4000);
   try {
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 4000);
-
     const res = await fetch('https://infobus.startromagna.it/PercorsoService.asmx/GetPercorso', {
       method: 'POST',
       headers: {
@@ -336,7 +334,6 @@ async function fetchTripPercorso(tripId, palina = '6721') {
       body: JSON.stringify({ trip_id: tripId, palina: String(palina) }),
       signal: controller.signal
     });
-    clearTimeout(timeoutId);
 
     const json = await res.json();
     const rawStops = typeof json.d === 'string' ? JSON.parse(json.d) : json.d;
@@ -353,6 +350,8 @@ async function fetchTripPercorso(tripId, palina = '6721') {
     console.error(`[InfoBus] Errore fetchTripPercorso trip ${tripId}:`, err.message);
     if (cached) return cached.stops;
     return [];
+  } finally {
+    clearTimeout(timeoutId);
   }
 }
 
@@ -371,37 +370,45 @@ async function getRealLiveBuses(staticData) {
     stopCoordsMap.set(String(s.stop_id), { lat: s.lat, lon: s.lon, stop_name: s.stop_name });
   });
 
-  // Sonde snelle e complete per catturare tutti i bus in circolazione su entrambe le direzioni
+  // Tutte e 7 le sonde strategiche interrogate in parallelo su entrambe le direzioni
   const probeStops = [
-    { target_id: '2985', palina: '6721' }, // Quasimodo (passano entrambe le direzioni)
-    { target_id: '2495', palina: '5161' }, // Cesena FS dir 0
-    { target_id: '2494', palina: '5160' }, // Cesena FS dir 1
-    { target_id: '2602', palina: '5692' }  // Ghirotti Ospedale
+    { target_id: '2985', palina: '6721' }, // Quasimodo (entrambe le direzioni)
+    { target_id: '2495', palina: '5161' }, // Cesena FS dir. 0
+    { target_id: '2494', palina: '5160' }, // Cesena FS dir. 1
+    { target_id: '2602', palina: '5692' }, // Ghirotti Ospedale dir. 0
+    { target_id: '2601', palina: '5691' }, // Ghirotti Ospedale dir. 1
+    { target_id: '2983', palina: '6700' }, // Rio Maggiore
+    { target_id: '2994', palina: '6770' }  // Montefiore
   ];
 
   const boardResults = await Promise.allSettled(
     probeStops.map(p => fetchStopBoard(p.target_id, p.palina))
   );
 
+  // Per ogni trip_id tiene la telemetria reale letta dalla fermata più vicina davanti al bus
   const activeTripsMap = new Map();
   for (const r of boardResults) {
-    if (r.status === 'fulfilled' && Array.isArray(r.value)) {
-      for (const item of r.value) {
-        if (!item.trip_id || item.is_cancelled) continue;
-        // Pre-filtra subito corse troppo lontane nel futuro o concluse da molto
-        if (item.eta_minutes !== null && item.eta_minutes !== undefined) {
-          if (item.eta_minutes > 35 || item.eta_minutes < -15) continue;
-        }
+    if (r.status !== 'fulfilled' || !Array.isArray(r.value)) continue;
+    for (const item of r.value) {
+      if (!item.trip_id || item.is_cancelled) continue;
+      const existing = activeTripsMap.get(item.trip_id);
+      if (!existing) {
+        activeTripsMap.set(item.trip_id, { ...item });
+        continue;
+      }
+      const itemEta = item.eta_minutes !== null && item.eta_minutes >= 0 ? item.eta_minutes : Infinity;
+      const existEta = existing.eta_minutes !== null && existing.eta_minutes >= 0 ? existing.eta_minutes : Infinity;
+      const itemIsBetter =
+        (item.has_realtime && !existing.has_realtime) ||
+        (item.has_realtime === existing.has_realtime && itemEta < existEta);
 
-        if (!activeTripsMap.has(item.trip_id)) {
-          activeTripsMap.set(item.trip_id, item);
-        } else {
-          // Se presente, prendi il dato con ETA più basso o veicolo valorizzato
-          const existing = activeTripsMap.get(item.trip_id);
-          if (!existing.vehicle_id && item.vehicle_id) {
-            existing.vehicle_id = item.vehicle_id;
-          }
-        }
+      if (itemIsBetter) {
+        activeTripsMap.set(item.trip_id, {
+          ...item,
+          vehicle_id: item.vehicle_id || existing.vehicle_id
+        });
+      } else if (!existing.vehicle_id && item.vehicle_id) {
+        existing.vehicle_id = item.vehicle_id;
       }
     }
   }
@@ -410,15 +417,16 @@ async function getRealLiveBuses(staticData) {
   const currentTotalSeconds = nowRome.totalSeconds;
   const liveBuses = [];
 
-  // Scarica tutti i percorsi attivi in PARALLELO con Promise.allSettled (da ~15s a ~1s!)
-  const activeTripsList = Array.from(activeTripsMap.values());
+  // Pre-filtra corse troppo lontane (>35m) e scarica tutti i percorsi attivi in PARALLELO
+  const candidateEntries = [...activeTripsMap.entries()].filter(
+    ([, meta]) => meta.eta_minutes === null || meta.eta_minutes <= 35
+  );
   const percorsoResults = await Promise.allSettled(
-    activeTripsList.map(t => fetchTripPercorso(t.trip_id, t.palina || '6721'))
+    candidateEntries.map(([tripId, meta]) => fetchTripPercorso(tripId, meta.palina || '6721'))
   );
 
-  for (let i = 0; i < activeTripsList.length; i++) {
-    const tripMeta = activeTripsList[i];
-    const tripId = tripMeta.trip_id;
+  for (let i = 0; i < candidateEntries.length; i++) {
+    const [tripId, tripMeta] = candidateEntries[i];
     const pRes = percorsoResults[i];
     if (pRes.status !== 'fulfilled' || !pRes.value || pRes.value.length < 2) continue;
     const rawPercorso = pRes.value;
@@ -506,12 +514,14 @@ async function getRealLiveBuses(staticData) {
 
     const idxA = stopA.shape_index;
     const idxB = stopB.shape_index;
+    let busShapeIndex = idxA;
 
     if (shape && shape.length >= 2) {
       if (idxA === idxB || idxB < idxA) {
         const pt = shape[idxA] || shape[0];
         lat = pt[0];
         lon = pt[1];
+        busShapeIndex = idxA;
         const nextPt = shape[Math.min(shape.length - 1, idxA + 1)] || pt;
         bearing = calculateBearing(pt[0], pt[1], nextPt[0], nextPt[1]);
       } else {
@@ -520,6 +530,7 @@ async function getRealLiveBuses(staticData) {
         lat = interp.lat;
         lon = interp.lon;
         bearing = interp.bearing;
+        busShapeIndex = idxA + interp.segmentIndex;
       }
     } else {
       lat = stopA.lat + (stopB.lat - stopA.lat) * progress;
@@ -536,6 +547,8 @@ async function getRealLiveBuses(staticData) {
       lat: Math.round(lat * 100000) / 100000,
       lon: Math.round(lon * 100000) / 100000,
       bearing,
+      shape_index: busShapeIndex,
+      position_type: 'estimated_from_infobus',
       delay_minutes: tripMeta.delay_minutes || 0,
       status: statusText,
       status_text: tripMeta.status_text,

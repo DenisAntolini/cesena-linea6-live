@@ -560,14 +560,17 @@
 
         if (!approachingBus || approachingBus.lat == null || approachingBus.lon == null) return;
 
-        const busMatch = findClosestVertex(shape, approachingBus.lat, approachingBus.lon);
-        const stopMatch = findClosestVertex(shape, stop.lat, stop.lon);
+        const busIdx = typeof approachingBus.shape_index === 'number'
+          ? approachingBus.shape_index
+          : findClosestVertex(shape, approachingBus.lat, approachingBus.lon).index;
 
-        // Disegna il tratto blu acceso di Google Maps SOLO SE:
-        // 1. Il bus si trova a monte della fermata selezionata (busIdx < stopIdx)
-        // 2. La distanza del bus dalla polilinea è < 350 metri (evita righe storte in caso di deviazione lontana per lavori)
-        if (busMatch.index >= 0 && stopMatch.index >= 0 && busMatch.index < stopMatch.index && busMatch.distance < 350) {
-          const approachPts = shape.slice(busMatch.index, stopMatch.index + 1);
+        const stopIdx = typeof stop.shape_index === 'number'
+          ? stop.shape_index
+          : findClosestVertex(shape, stop.lat, stop.lon).index;
+
+        // Disegna il tratto blu acceso di Google Maps SOLO SE il bus è a monte della fermata (busIdx < stopIdx)
+        if (busIdx >= 0 && stopIdx > busIdx) {
+          const approachPts = shape.slice(busIdx, stopIdx + 1);
           if (approachPts.length >= 2) {
             // Casing bianco sotto
             L.polyline(approachPts, {
@@ -1048,20 +1051,24 @@
             iconAnchor: [26, 21]
           });
 
+          const buildBusPopupHtml = (bus) => `
+            <div class="p-2 text-xs">
+              <div class="font-extrabold text-sm text-[#E30613] mb-1">Linea 6 • ${bus.destination}</div>
+              <div>Matricola: <strong>${bus.vehicle_id}</strong></div>
+              <div>Stato: <strong>${bus.status_text || bus.status}</strong></div>
+              <div class="text-[11px] text-slate-400 mt-1">Posizione stimata da ritardo Start (±1 min)</div>
+              <div class="text-[11px] text-slate-500 mt-1">Tra: ${bus.current_stop?.stop_name} ➔ ${bus.next_stop?.stop_name}</div>
+            </div>
+          `;
+
           if (!state.busMarkers.has(b.id)) {
             const marker = L.marker([b.lat, b.lon], { icon: busIcon, zIndexOffset: 800 }).addTo(state.busesGroup);
-            marker.bindPopup(`
-              <div class="p-2 text-xs">
-                <div class="font-extrabold text-sm text-[#E30613] mb-1">Linea 6 • ${b.destination}</div>
-                <div>Matricola: <strong>${b.vehicle_id}</strong></div>
-                <div>Stato: <strong>${b.status_text || b.status}</strong></div>
-                <div class="text-[11px] text-slate-500 mt-1">Tra: ${b.current_stop?.stop_name} ➔ ${b.next_stop?.stop_name}</div>
-              </div>
-            `);
+            marker.bindPopup(buildBusPopupHtml(b));
             state.busMarkers.set(b.id, marker);
           } else {
             const existing = state.busMarkers.get(b.id);
             existing.setIcon(busIcon);
+            existing.setPopupContent(buildBusPopupHtml(b));
             animateMarkerTo(existing, b.lat, b.lon, 800);
           }
         });
