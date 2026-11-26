@@ -983,7 +983,51 @@
          ======================================================================== */
       let liveFetchSeq = 0;
       let lastAppliedLiveSeq = 0;
-      const busProgressLock = new Map(); // trip_id -> { exactPos, lat, lon, bearing, updatedAt }
+      const busProgressLock = new Map(); // trip_id -> { exactPos, lat, lon, bearing, updatedAt, bigBackCount }
+
+      function calcBearingDeg(lat1, lon1, lat2, lon2) {
+        const toRad = d => (d * Math.PI) / 180;
+        const toDeg = r => (r * 180) / Math.PI;
+        const y = Math.sin(toRad(lon2 - lon1)) * Math.cos(toRad(lat2));
+        const x =
+          Math.cos(toRad(lat1)) * Math.sin(toRad(lat2)) -
+          Math.sin(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.cos(toRad(lon2 - lon1));
+        return Math.round(((toDeg(Math.atan2(y, x)) + 360) % 360) * 10) / 10;
+      }
+
+      function advanceAlongShapeByMeters(shape, startExactPos, maxMeters) {
+        if (!shape || shape.length < 2) return null;
+        let idx = Math.max(0, Math.min(shape.length - 2, Math.floor(startExactPos)));
+        let frac = Math.max(0, Math.min(1, startExactPos - idx));
+        let remaining = maxMeters;
+
+        while (idx < shape.length - 1) {
+          const p1 = shape[idx];
+          const p2 = shape[idx + 1];
+          const segLen = Math.max(0.1, haversineMeters(p1[0], p1[1], p2[0], p2[1]));
+          const remInSeg = segLen * (1 - frac);
+          if (remaining <= remInSeg) {
+            const newFrac = frac + remaining / segLen;
+            return {
+              exactPos: Math.round((idx + newFrac) * 1000) / 1000,
+              lat: p1[0] + (p2[0] - p1[0]) * newFrac,
+              lon: p1[1] + (p2[1] - p1[1]) * newFrac,
+              bearing: calcBearingDeg(p1[0], p1[1], p2[0], p2[1])
+            };
+          }
+          remaining -= remInSeg;
+          idx++;
+          frac = 0;
+        }
+        const last = shape[shape.length - 1];
+        const prev = shape[shape.length - 2];
+        return {
+          exactPos: shape.length - 1,
+          lat: last[0],
+          lon: last[1],
+          bearing: calcBearingDeg(prev[0], prev[1], last[0], last[1])
+        };
+      }
 
       function applyMonotonicProgressLock(buses) {
         const now = Date.now();
@@ -996,14 +1040,28 @@
           const newPos = typeof bus.exact_shape_pos === 'number'
             ? bus.exact_shape_pos
             : (typeof bus.shape_index === 'number' ? bus.shape_index : null);
-
           if (newPos === null) return bus;
 
           const prev = busProgressLock.get(lockKey);
-          if (prev && newPos < prev.exactPos) {
+          if (!prev) {
+            busProgressLock.set(lockKey, {
+              exactPos: newPos,
+              lat: bus.lat,
+              lon: bus.lon,
+              bearing: bus.bearing,
+              updatedAt: now,
+              bigBackCount: 0
+            });
+            return bus;
+          }
+
+          const dtSec = Math.max(1, (now - prev.updatedAt) / 1000);
+
+          // 1. SALTO ALL'INDIETRO
+          if (newPos < prev.exactPos) {
             const backDist = haversineMeters(bus.lat, bus.lon, prev.lat, prev.lon);
-            if (backDist <= 450) {
-              // Resta fermo sulla posizione più avanzata (aggiorna comunque ritardo e timestamp)
+            if (backDist <= 1200) {
+              prev.bigBackCount = 0;
               prev.updatedAt = now;
               return {
                 ...bus,
@@ -1014,26 +1072,74 @@
                 exact_shape_pos: prev.exactPos
               };
             }
+            // Oltre 1200m: accetta solo se confermato per 3 poll consecutivi (15s)
+            prev.bigBackCount = (prev.bigBackCount || 0) + 1;
+            if (prev.bigBackCount < 3) {
+              prev.updatedAt = now;
+              return {
+                ...bus,
+                lat: prev.lat,
+                lon: prev.lon,
+                bearing: prev.bearing,
+                shape_index: Math.floor(prev.exactPos),
+                exact_shape_pos: prev.exactPos
+              };
+            }
+            busProgressLock.set(lockKey, {
+              exactPos: newPos,
+              lat: bus.lat,
+              lon: bus.lon,
+              bearing: bus.bearing,
+              updatedAt: now,
+              bigBackCount: 0
+            });
+            return bus;
           }
 
-          // Avanzamento normale o riallineamento reale > 450m
+          // 2. AVANZAMENTO IN AVANTI (con clamp anti-spike se il tab era attivo)
+          prev.bigBackCount = 0;
+          const forwardDist = haversineMeters(prev.lat, prev.lon, bus.lat, bus.lon);
+          const maxPlausibleDist = Math.max(140, dtSec * 22); // max ~80 km/h
+
+          if (dtSec <= 25 && forwardDist > maxPlausibleDist) {
+            const shape = getPolylineForDirection(String(bus.direction_id));
+            const clamped = advanceAlongShapeByMeters(shape, prev.exactPos, maxPlausibleDist);
+            if (clamped && clamped.exactPos < newPos) {
+              busProgressLock.set(lockKey, {
+                exactPos: clamped.exactPos,
+                lat: clamped.lat,
+                lon: clamped.lon,
+                bearing: clamped.bearing,
+                updatedAt: now,
+                bigBackCount: 0
+              });
+              return {
+                ...bus,
+                lat: clamped.lat,
+                lon: clamped.lon,
+                bearing: clamped.bearing,
+                shape_index: Math.floor(clamped.exactPos),
+                exact_shape_pos: clamped.exactPos
+              };
+            }
+          }
+
           busProgressLock.set(lockKey, {
             exactPos: newPos,
             lat: bus.lat,
             lon: bus.lon,
             bearing: bus.bearing,
-            updatedAt: now
+            updatedAt: now,
+            bigBackCount: 0
           });
           return bus;
         });
 
-        // Pulizia trip scaduti da oltre 5 minuti
         for (const [key, entry] of busProgressLock.entries()) {
           if (!seenKeys.has(key) && now - entry.updatedAt > 5 * 60 * 1000) {
             busProgressLock.delete(key);
           }
         }
-
         return stabilized;
       }
 
@@ -1121,12 +1227,12 @@
               iconAnchor: [26, 21]
             });
             const marker = L.marker([b.lat, b.lon], { icon: busIcon, zIndexOffset: 800 }).addTo(state.busesGroup);
-            marker._lastHtml = html;
+            marker._vehicleText = vehicleText;
             marker.bindPopup(buildBusPopupHtml(b));
             state.busMarkers.set(b.id, marker);
           } else {
             const existing = state.busMarkers.get(b.id);
-            if (existing._lastHtml !== html) {
+            if (existing._vehicleText !== vehicleText) {
               const busIcon = L.divIcon({
                 className: 'bus-marker-container',
                 html: html,
@@ -1134,7 +1240,13 @@
                 iconAnchor: [26, 21]
               });
               existing.setIcon(busIcon);
-              existing._lastHtml = html;
+              existing._vehicleText = vehicleText;
+            } else {
+              const el = existing.getElement();
+              if (el) {
+                const ring = el.querySelector('.bus-bearing-ring');
+                if (ring) ring.style.transform = `rotate(${rotAngle}deg)`;
+              }
             }
             existing.setPopupContent(buildBusPopupHtml(b));
             animateMarkerTo(existing, b.lat, b.lon, 1200);

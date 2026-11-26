@@ -356,6 +356,56 @@ async function fetchTripPercorso(tripId, palina = '6721') {
 }
 
 /**
+ * Spalma gli orari identici (stesso minuto HH:MM) in modo proporzionale alla distanza stradale
+ * evitando teletrasporti allo scoccare del minuto tra fermate vicine.
+ */
+function spreadDuplicateStopTimes(stops, shape) {
+  if (!stops || stops.length < 2) return stops;
+  const result = stops.map(s => ({ ...s }));
+
+  const cumDist = [0];
+  for (let i = 1; i < result.length; i++) {
+    const idxA = result[i - 1].shape_index;
+    const idxB = result[i].shape_index;
+    let d = 0;
+    if (shape && shape.length >= 2 && idxB > idxA) {
+      for (let k = idxA; k < Math.min(idxB, shape.length - 1); k++) {
+        d += haversineMeters(shape[k][0], shape[k][1], shape[k + 1][0], shape[k + 1][1]);
+      }
+    } else {
+      d = haversineMeters(result[i - 1].lat, result[i - 1].lon, result[i].lat, result[i].lon);
+    }
+    cumDist.push(cumDist[i - 1] + Math.max(10, d));
+  }
+
+  let i = 0;
+  while (i < result.length) {
+    let j = i;
+    while (j + 1 < result.length && result[j + 1].adjustedSec <= result[i].adjustedSec) {
+      j++;
+    }
+    if (j > i) {
+      const tStart = result[i].adjustedSec;
+      const hasNext = j + 1 < result.length;
+      const endIdx = hasNext ? j + 1 : j;
+      const tEnd = hasNext ? result[j + 1].adjustedSec : tStart + (j - i) * 20;
+      const totalSpanSec = Math.max(10, tEnd - tStart);
+      const distStart = cumDist[i];
+      const totalDist = Math.max(1, cumDist[endIdx] - distStart);
+
+      for (let k = i + 1; k <= j; k++) {
+        const frac = (cumDist[k] - distStart) / totalDist;
+        const spreadSec = Math.round(tStart + frac * totalSpanSec);
+        result[k].adjustedSec = Math.max(result[k - 1].adjustedSec + 1, spreadSec);
+      }
+    }
+    i = j + 1;
+  }
+
+  return result;
+}
+
+/**
  * Calcola la posizione reale dei bus attivi interpolando le coordinate delle fermate del percorso.
  * ZERO SIMULATORI: se non ci sono corse attive, restituisce [].
  */
@@ -385,32 +435,48 @@ async function getRealLiveBuses(staticData) {
     probeStops.map(p => fetchStopBoard(p.target_id, p.palina))
   );
 
-  // Per ogni trip_id tiene la telemetria reale letta dalla fermata più vicina davanti al bus
-  const activeTripsMap = new Map();
+  // Raccoglie tutte le letture per ciascun trip_id dalle 7 sonde
+  const tripReadingsMap = new Map();
   for (const r of boardResults) {
     if (r.status !== 'fulfilled' || !Array.isArray(r.value)) continue;
     for (const item of r.value) {
       if (!item.trip_id || item.is_cancelled) continue;
-      const existing = activeTripsMap.get(item.trip_id);
-      if (!existing) {
-        activeTripsMap.set(item.trip_id, { ...item });
-        continue;
+      if (!tripReadingsMap.has(item.trip_id)) {
+        tripReadingsMap.set(item.trip_id, []);
       }
-      const itemEta = item.eta_minutes !== null && item.eta_minutes >= 0 ? item.eta_minutes : Infinity;
-      const existEta = existing.eta_minutes !== null && existing.eta_minutes >= 0 ? existing.eta_minutes : Infinity;
-      const itemIsBetter =
-        (item.has_realtime && !existing.has_realtime) ||
-        (item.has_realtime === existing.has_realtime && itemEta < existEta);
-
-      if (itemIsBetter) {
-        activeTripsMap.set(item.trip_id, {
-          ...item,
-          vehicle_id: item.vehicle_id || existing.vehicle_id
-        });
-      } else if (!existing.vehicle_id && item.vehicle_id) {
-        existing.vehicle_id = item.vehicle_id;
-      }
+      tripReadingsMap.get(item.trip_id).push(item);
     }
+  }
+
+  const activeTripsMap = new Map();
+  for (const [tripId, readings] of tripReadingsMap.entries()) {
+    const sorted = [...readings].sort((a, b) => {
+      if (a.has_realtime !== b.has_realtime) return a.has_realtime ? -1 : 1;
+      const etaA = a.eta_minutes !== null && a.eta_minutes >= 0 ? a.eta_minutes : Infinity;
+      const etaB = b.eta_minutes !== null && b.eta_minutes >= 0 ? b.eta_minutes : Infinity;
+      return etaA - etaB;
+    });
+
+    const primary = { ...sorted[0] };
+    if (!primary.vehicle_id) {
+      const withVeh = sorted.find(x => x.vehicle_id);
+      if (withVeh) primary.vehicle_id = withVeh.vehicle_id;
+    }
+
+    // Mediana dei ritardi realtime delle sonde davanti al bus (elimina il ping-pong tra sonde)
+    const rtDelays = sorted
+      .filter(x => x.has_realtime && x.eta_minutes !== null && x.eta_minutes >= -1 && x.eta_minutes <= 30)
+      .map(x => x.delay_minutes || 0)
+      .sort((a, b) => a - b);
+
+    if (rtDelays.length > 0) {
+      const mid = Math.floor(rtDelays.length / 2);
+      primary.delay_minutes = rtDelays.length % 2 === 1
+        ? rtDelays[mid]
+        : Math.round((rtDelays[mid - 1] + rtDelays[mid]) / 2);
+    }
+
+    activeTripsMap.set(tripId, primary);
   }
 
   const nowRome = getRomeTimeParts();
@@ -454,9 +520,9 @@ async function getRealLiveBuses(staticData) {
     const filteredPercorso = rawPercorso.filter(s => validStopsMap.has(String(s.stop_id)));
     if (filteredPercorso.length < 2) continue;
 
-    // Aggiusta gli orari di fermata con il ritardo effettivo rilevato
+    // Aggiusta gli orari di fermata con il ritardo effettivo rilevato e spalma i minuti identici
     const delaySec = (tripMeta.delay_minutes || 0) * 60;
-    const adjustedStops = filteredPercorso.map(s => {
+    const rawAdjustedStops = filteredPercorso.map(s => {
       const scheduledSec = timeStrToSeconds(s.departure_time || s.arrival_time) || 0;
       const validStop = validStopsMap.get(String(s.stop_id));
       return {
@@ -468,6 +534,7 @@ async function getRealLiveBuses(staticData) {
         stop_name: validStop.stop_name
       };
     });
+    const adjustedStops = spreadDuplicateStopTimes(rawAdjustedStops, shape);
 
     const firstStop = adjustedStops[0];
     const lastStop = adjustedStops[adjustedStops.length - 1];
